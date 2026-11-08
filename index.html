@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek WebtoHarness - 本地智能体桥接</title>
+    <style>
+        :root {
+            --bg: #0f1115;
+            --bg-card: #1a1d24;
+            --text-main: #e2e8f0;
+            --text-muted: #94a3b8;
+            --primary: #4CAF50;
+            --primary-hover: #43a047;
+            --border: #2d3748;
+            --danger: #ef4444;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        h1 {
+            font-size: 2.8rem;
+            font-weight: 800;
+            margin-bottom: 16px;
+            background: linear-gradient(90deg, #4CAF50, #2dd4bf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        p.subtitle {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            margin: 40px 0 20px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 10px;
+        }
+
+        /* 特性卡片 */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .feature-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            border-color: #3b4252;
+        }
+        .feature-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .feature-card p {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+        }
+
+        /* 下载区 */
+        .download-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            text-align: center;
+            margin-top: 40px;
+        }
+        .download-group {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 24px;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-primary {
+            background-color: var(--primary);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+        }
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-2px);
+        }
+        .btn-outline {
+            background-color: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover {
+            background-color: var(--border);
+            transform: translateY(-2px);
+        }
+
+        /* 步骤指引 */
+        .steps {
+            list-style: none;
+            margin-top: 20px;
+        }
+        .steps li {
+            position: relative;
+            padding-left: 30px;
+            margin-bottom: 16px;
+            color: var(--text-muted);
+        }
+        .steps li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 8px;
+            width: 16px;
+            height: 16px;
+            background-color: var(--primary);
+            border-radius: 50%;
+            opacity: 0.8;
+        }
+        .steps code {
+            background: #0b0e14;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: ui-monospace, monospace;
+            font-size: 0.9em;
+            color: #4ade80;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 80px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>DeepSeek WebtoHarness</h1>
+            <p class="subtitle">赋予网页端 AI 真实的本地文件系统与 Shell 操作能力</p>
+        </header>
+
+        <div class="section-title">✨ 核心特性</div>
+        <div class="features">
+            <div class="feature-card">
+                <h3>📂 本地文件直连</h3>
+                <p>基于 File System Access API，AI 能够直接读取、写入、修改和删除你授权的本地目录，告别复制粘贴。</p>
+            </div>
+            <div class="feature-card">
+                <h3>💻 命令自动执行</h3>
+                <p>通过轻量级本地 Node.js 服务，AI 可以执行 CMD/PowerShell 命令，跑测试、编译代码一气呵成。</p>
+            </div>
+            <div class="feature-card">
+                <h3>🛡️ 防封控与自动重试</h3>
+                <p>内置高频请求拦截（冷却机制）与网络异常自动重试（10s 间隔），保障长时间连续调用不被封禁。</p>
+            </div>
+            <div class="feature-card">
+                <h3>🎨 沉浸式 UI 折叠</h3>
+                <p>冗长的 Toolcall 代码块与工具返回结果自动折叠，且左侧配有实时状态图标（运行中/成功/失败）。</p>
+            </div>
+            <div class="feature-card">
+                <h3>⚡ 批量并发优化</h3>
+                <p>支持处理超时保护与写后缓冲，避免文件句柄冲突，彻底解决批次调用时的静默丢包问题。</p>
+            </div>
+            <div class="feature-card">
+                <h3>🔒 安全可控</h3>
+                <p>引入确认弹窗机制。对于危险命令或文件覆盖，用户点击确认后才会执行，且支持一键切换“完全权限”。</p>
+            </div>
+        </div>
+
+        <div class="section-title">🚀 快速开始</div>
+        <ul class="steps">
+            <li><strong>准备环境：</strong>确保电脑安装了 <a href="https://nodejs.org/" target="_blank" style="color:var(--primary)">Node.js</a> 与浏览器插件 <a href="https://www.tampermonkey.net/" target="_blank" style="color:var(--primary)">Tampermonkey</a>。</li>
+            <li><strong>启动本地服务：</strong>下载下方的 <code>server.js</code>，在该文件所在目录打开终端，运行 <code>node server.js</code>。</li>
+            <li><strong>安装脚本：</strong>下载下方的 <code>用户端脚本.js</code>，新建油猴脚本并粘贴内容，保存。</li>
+            <li><strong>连接与授权：</strong>刷新 DeepSeek 网页，在左侧面板点击“开启模式”，依次选择工作区目录、输入绝对路径和任务目标。</li>
+        </ul>
+
+        <div class="download-section">
+            <h2>获取文件</h2>
+            <p style="color: var(--text-muted); margin-top: 8px;">点击下方按钮直接下载最新的核心文件</p>
+            <div class="download-group">
+                <a href="./server.js" download="server.js" class="btn btn-primary">下载 server.js</a>
+                <a href="./用户端脚本.js" download="用户端脚本.js" class="btn btn-primary">下载 用户端脚本.js</a>
+            </div>
+            <div style="margin-top: 24px;">
+                <a href="https://github.com/HanabiraMF/deepseek-webtoharness" target="_blank" class="btn btn-outline">访问 GitHub 仓库</a>
+            </div>
+        </div>
+
+        <footer>
+            <p>Made with ❤️ for DeepSeek Web &copy; 2026 <a href="https://github.com/HanabiraMF" target="_blank">HanabiraMF</a></p>
+            <p style="margin-top: 8px; font-size: 0.8rem; color: #4b5563;">免责声明：本地服务与脚本会访问您的文件系统，请确保仅在安全的网络和个人电脑上使用。</p>
+        </footer>
+    </div>
+</body>
+</html>
