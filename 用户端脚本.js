@@ -271,9 +271,9 @@ ${getPluginsPrompt()}
     }
 
     function getPluginsPrompt() {
-        if (!window.DS_Agent_Plugins || window.DS_Agent_Plugins.length === 0) return '';
+        if (!W.DS_Agent_Plugins || W.DS_Agent_Plugins.length === 0) return '';
         let prompt = '【社区拓展工具】\n';
-        window.DS_Agent_Plugins.forEach(p => {
+        W.DS_Agent_Plugins.forEach(p => {
             prompt += `- ${p.name}: ${p.description}\n`;
         });
         return prompt;
@@ -1561,9 +1561,9 @@ ${getPluginsPrompt()}
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
             case 'register_plugin': return toolRegisterPlugin(call);
             default: {
-                // 尝试在社区插件中查找
-                if (window.DS_Agent_Plugins) {
-                    const plugin = window.DS_Agent_Plugins.find(p => p.name.toLowerCase() === op);
+                // 尝试在社区插件中查找（必须使用 W 也就是 unsafeWindow 的上下文）
+                if (W.DS_Agent_Plugins) {
+                    const plugin = W.DS_Agent_Plugins.find(p => p.name.toLowerCase() === op);
                     if (plugin && typeof plugin.execute === 'function') {
                         try {
                             // 将 call 的所有参数传给插件
