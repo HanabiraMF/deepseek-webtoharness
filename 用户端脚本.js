@@ -284,6 +284,10 @@
 - gettime: (获取当前时间)
 - register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个【前端】自定义工具，当前页面内存生效)
 - reload_server_plugins: (无参数) (如果你用 writefile 往 plugins/xxx.js 写了 Node.js 插件，调用此工具热加载它)
+- kill_process: <pid>进程ID</pid> (强制终止后台运行的程序。如果 exec 超时返回了 PID，且你觉得它卡死了，用它杀掉)
+
+【关于长驻命令】
+如果你执行了耗时超过 30 秒的命令（如启动服务器、长循环等），exec 会返回当前的输出和进程 PID，并让它转入后台运行。如果你觉得不需要它了或者卡死了，请调用 kill_process 终结它。
 
 【自举能力：创造并使用自定义工具】
 当你发现现有工具无法满足需求时，可以自己编写插件扩展能力。分为两种：
@@ -1609,6 +1613,18 @@ ${getPluginsPrompt()}
         }
     }
 
+    async function toolKillProcess(call) {
+        if (!call.pid) throw new ToolError('参数校验', '缺少 pid', '请提供要终止的进程 PID');
+        try {
+            const resp = await agentFetch('/exec/kill', { pid: call.pid }, 5000);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            return data.output;
+        } catch (e) {
+            throw new ToolError('终止进程', e.message, '请检查服务端状态');
+        }
+    }
+
     async function toolSleep(call) {
         const ms = parseInt(call.timeout ?? call.ms ?? 1000, 10);
         if (isNaN(ms) || ms < 0) throw new ToolError('参数校验', 'timeout 必须为非负整数毫秒', '例如 1000');
@@ -1649,6 +1665,7 @@ ${getPluginsPrompt()}
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
             case 'register_plugin': return toolRegisterPlugin(call);
+            case 'kill_process': return toolKillProcess(call);
             case 'reload_server_plugins': return toolReloadServerPlugins(call);
             default: {
                 // 1. 尝试在前端社区插件中查找
