@@ -2,6 +2,39 @@ const http = require('http');
 const { exec } = require('child_process');
 const fs = require('fs');
 const crypto = require('crypto');
+const path = require('path');
+
+const PLUGINS_DIR = path.join(process.cwd(), 'plugins');
+let serverPlugins = {}; // { name: { description, execute } }
+
+// 确保插件目录存在
+if (!fs.existsSync(PLUGINS_DIR)) {
+    fs.mkdirSync(PLUGINS_DIR, { recursive: true });
+}
+
+function loadServerPlugins() {
+    serverPlugins = {};
+    try {
+        const files = fs.readdirSync(PLUGINS_DIR);
+        for (const file of files) {
+            if (file.endsWith('.js')) {
+                try {
+                    delete require.cache[require.resolve(path.join(PLUGINS_DIR, file))];
+                    const plugin = require(path.join(PLUGINS_DIR, file));
+                    if (plugin && plugin.name && typeof plugin.execute === 'function') {
+                        serverPlugins[plugin.name] = plugin;
+                    }
+                } catch (e) {
+                    console.error(`加载插件 ${file} 失败:`, e.message);
+                }
+            }
+        }
+        console.log(`已加载 ${Object.keys(serverPlugins).length} 个本地服务端插件。`);
+    } catch (e) {
+        console.error('读取插件目录失败:', e.message);
+    }
+}
+loadServerPlugins();
 
 const PORT = parseInt(process.env.DS_AGENT_PORT || '39999', 10);
 const MAX_BODY = 1024 * 1024;
@@ -63,6 +96,32 @@ const server = http.createServer(async (req, res) => {
     let pathname;
     try { pathname = new URL(req.url, `http://127.0.0.1:${PORT}`).pathname; }
     catch { return sendJson(res, 400, { error: 'Bad URL' }); }
+
+    if ((req.method === 'POST' || req.method === 'GET') && pathname === '/plugins/list') {
+        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description }));
+        return sendJson(res, 200, { plugins: list });
+    }
+
+    if (req.method === 'POST' && pathname === '/plugins/reload') {
+        loadServerPlugins();
+        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description }));
+        return sendJson(res, 200, { success: true, plugins: list });
+    }
+
+    if (req.method === 'POST' && pathname === '/plugins/exec') {
+        try {
+            const { name, args } = JSON.parse(await readBody(req) || '{}');
+            if (!name || !serverPlugins[name]) {
+                return sendJson(res, 404, { error: `服务端插件不存在: ${name}` });
+            }
+            Promise.resolve(serverPlugins[name].execute(args))
+                .then(result => sendJson(res, 200, { result: String(result) }))
+                .catch(err => sendJson(res, 200, { error: err.message || String(err) }));
+        } catch (e) {
+            sendJson(res, 400, { error: e.message });
+        }
+        return;
+    }
 
     if (req.method === 'POST' && pathname === '/exec') {
         try {

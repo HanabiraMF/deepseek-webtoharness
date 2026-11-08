@@ -13,7 +13,8 @@
     'use strict';
 
     const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
-    W.DS_Agent_Plugins = W.DS_Agent_Plugins || []; // 初始化社区插件注册表
+    W.DS_Agent_Plugins = W.DS_Agent_Plugins || []; // 初始化前端插件注册表
+    W.serverPlugins = []; // 服务端（Node.js）插件列表
 
     const Svg = (inner, size = 14, extra = '') =>
         `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" class="ds-svg ${extra}">${inner}</svg>`;
@@ -281,7 +282,8 @@
 - chmod: <path>文件</path><mode>755</mode> (修改权限；类 Unix 用 chmod 语法，Windows 用 +R/-R 走 attrib)
 - sleep: <timeout>1000</timeout> (休眠指定毫秒，最大 5 分钟；用于轮询间隔或等待外部进程)
 - gettime: (获取当前时间)
-- register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个自定义工具，下一轮即可直接调用)
+- register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个【前端】自定义工具，当前页面内存生效)
+- reload_server_plugins: (无参数) (如果你用 writefile 往 plugins/xxx.js 写了 Node.js 插件，调用此工具热加载它)
 
 【自举能力：创造并使用自定义工具】
 当你发现现有工具无法满足需求时，可以自己编写 JavaScript 插件，通过 register_plugin 注册后直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
@@ -302,12 +304,29 @@ ${getPluginsPrompt()}
     }
 
     function getPluginsPrompt() {
-        if (!W.DS_Agent_Plugins || W.DS_Agent_Plugins.length === 0) return '';
-        let prompt = '【社区拓展工具】\n';
-        W.DS_Agent_Plugins.forEach(p => {
-            prompt += `- ${p.name}: ${p.description}\n`;
-        });
+        let prompt = '';
+        if (W.DS_Agent_Plugins && W.DS_Agent_Plugins.length > 0) {
+            prompt += '【前端拓展工具】\n';
+            W.DS_Agent_Plugins.forEach(p => { prompt += `- ${p.name}: ${p.description}\n`; });
+        }
+        if (W.serverPlugins && W.serverPlugins.length > 0) {
+            prompt += '\n【服务端拓展工具 (Node.js)】\n';
+            W.serverPlugins.forEach(p => { prompt += `- ${p.name}: ${p.description}\n`; });
+        }
         return prompt;
+    }
+
+    async function fetchServerPlugins() {
+        try {
+            const resp = await agentFetch('/plugins/list', {}, 5000);
+            if (resp.ok) {
+                const data = await resp.json();
+                W.serverPlugins = data.plugins || [];
+                log(`已加载 ${W.serverPlugins.length} 个服务端插件`);
+            }
+        } catch (e) {
+            log(`获取服务端插件失败: ${e.message}`);
+        }
     }
 
     function parsePath(raw) {
@@ -1553,6 +1572,19 @@ ${getPluginsPrompt()}
         }
     }
 
+    async function toolReloadServerPlugins(call) {
+        try {
+            const resp = await agentFetch('/plugins/reload', {}, 5000);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            W.serverPlugins = data.plugins || [];
+            return `服务端插件重载成功！当前共加载 ${W.serverPlugins.length} 个插件：\n` +
+                   W.serverPlugins.map(p => `- ${p.name}`).join('\n');
+        } catch (e) {
+            throw new ToolError('重载插件', e.message, '请确保服务端正在运行');
+        }
+    }
+
     async function toolSleep(call) {
         const ms = parseInt(call.timeout ?? call.ms ?? 1000, 10);
         if (isNaN(ms) || ms < 0) throw new ToolError('参数校验', 'timeout 必须为非负整数毫秒', '例如 1000');
@@ -1593,20 +1625,34 @@ ${getPluginsPrompt()}
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
             case 'register_plugin': return toolRegisterPlugin(call);
+            case 'reload_server_plugins': return toolReloadServerPlugins(call);
             default: {
-                // 尝试在社区插件中查找（必须使用 W 也就是 unsafeWindow 的上下文）
+                // 1. 尝试在前端社区插件中查找
                 if (W.DS_Agent_Plugins) {
                     const plugin = W.DS_Agent_Plugins.find(p => p.name.toLowerCase() === op);
                     if (plugin && typeof plugin.execute === 'function') {
                         try {
-                            // 将 call 的所有参数传给插件
                             const result = await plugin.execute(call);
                             return String(result);
                         } catch (e) {
-                            throw new ToolError('插件执行', e.message || String(e), '请检查插件代码');
+                            throw new ToolError('前端插件执行', e.message || String(e), '请检查插件代码');
                         }
                     }
                 }
+                
+                // 2. 尝试在后端服务端插件中查找
+                if (W.serverPlugins && W.serverPlugins.some(p => p.name === op)) {
+                    try {
+                        const resp = await agentFetch('/plugins/exec', { name: op, args: call }, 60000);
+                        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                        const data = await resp.json();
+                        if (data.error) throw new Error(data.error);
+                        return data.result;
+                    } catch (e) {
+                        throw new ToolError('服务端插件执行', e.message, '请检查本地服务端和插件代码');
+                    }
+                }
+                
                 throw new ToolError('分发', `未知工具 "${op}"`, '检查工具名拼写');
             }
         }
@@ -2025,6 +2071,7 @@ ${getPluginsPrompt()}
                 setupContainer.style.display = 'none';
                 mainContainer.style.display = 'flex';
                 dsSetStatus('active', `已连接: ${dirHandle.name}`);
+                await fetchServerPlugins();
                 log(`授权成功: ${dirHandle.name}`);
                 msgStore.clear();
         toolcallStatusMap.clear();
