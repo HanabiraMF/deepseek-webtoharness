@@ -18,3 +18,6 @@ Thumbs.db
 sandbox/
 calc/bin/
 calc/obj/
+
+# AI 生成的服务端插件（本地私有）
+plugins/

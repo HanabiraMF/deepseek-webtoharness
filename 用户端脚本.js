@@ -286,7 +286,31 @@
 - reload_server_plugins: (无参数) (如果你用 writefile 往 plugins/xxx.js 写了 Node.js 插件，调用此工具热加载它)
 
 【自举能力：创造并使用自定义工具】
-当你发现现有工具无法满足需求时，可以自己编写 JavaScript 插件，通过 register_plugin 注册后直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
+当你发现现有工具无法满足需求时，可以自己编写插件扩展能力。分为两种：
+
+方式 A：前端临时插件（刷新页面失效）
+通过 register_plugin 注册，直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
+<plugin_js><![CDATA[
+({
+    name: 'my_tool',
+    description: '我的自定义工具',
+    execute: async (args) => { return '结果'; }
+})
+]]></plugin_js>
+
+方式 B：服务端永久插件（Node.js 环境，无跨域限制，可持久化）
+如果你需要访问本地文件、数据库、没有跨域限制的网络请求等，可以用 writefile 将 Node.js 代码写到 `plugins/xxx.js`，然后调用 `reload_server_plugins` 热加载！
+服务端插件模板 (plugins/xxx.js)：
+module.exports = {
+    name: 'my_node_tool',
+    description: '服务端 Node.js 工具',
+    execute: async (args) => {
+        // 可以在这里使用 require('fs'), require('child_process') 等
+        return '结果';
+    }
+};
+
+前端插件参考写法：
 <plugin_js><![CDATA[
 ({
     name: 'my_tool',

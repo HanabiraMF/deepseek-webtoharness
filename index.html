@@ -320,25 +320,25 @@
             
             <div class="tech-card">
                 <h3>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M6 12v6"/></svg>
-                    开发者永久拓展
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    全栈接管：本地 Node.js 拓展
                 </h3>
-                <p>如果你希望某个自定义功能永久保留，只需把这段代码贴进油猴脚本，AI 启动时就会自动学会使用它，永不丢失。</p>
+                <p>突破浏览器沙箱限制！AI 可编写原生 Node.js 代码存入本地，通过热重载，直接调用系统底层 API、甚至连接数据库。</p>
                 <div class="code-window">
                     <div class="code-header">
                         <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
-                        <span style="margin-left: 8px;">my_custom_plugin.js</span>
+                        <span style="margin-left: 8px;">plugins/my_node_tool.js</span>
                     </div>
                     <div class="code-content">
-<span class="comment">// 直接写死在油猴脚本里即可永久生效</span>
-<span class="keyword">window</span>.DS_Agent_Plugins.<span class="func">push</span>({
-  <span class="keyword">name</span>: <span class="string">'get_weather'</span>,
-  <span class="keyword">description</span>: <span class="string">'获取指定城市的天气'</span>,
+<span class="comment">// AI 写入本地的 Node.js 插件</span>
+<span class="keyword">module</span>.exports = {
+  <span class="keyword">name</span>: <span class="string">'scan_local_network'</span>,
+  <span class="keyword">description</span>: <span class="string">'扫描本地局域网设备'</span>,
   <span class="keyword">execute</span>: <span class="keyword">async</span> (args) => {
-    <span class="keyword">const</span> res = <span class="keyword">await</span> <span class="func">fetch</span>(<span class="string">`https://api...`</span>);
-    <span class="keyword">return</span> <span class="keyword">await</span> res.<span class="func">text</span>();
+    <span class="keyword">const</span> { execSync } = <span class="func">require</span>(<span class="string">'child_process'</span>);
+    <span class="keyword">return</span> execSync(<span class="string">'arp -a'</span>).toString();
   }
-});
+};
                     </div>
                 </div>
             </div>
