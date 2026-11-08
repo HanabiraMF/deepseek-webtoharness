@@ -1538,6 +1538,15 @@ ${getPluginsPrompt()}
             pluginObj.name = pluginName;
             if (!pluginObj.description) pluginObj.description = 'AI 动态生成的插件';
 
+            // 避免重复注册
+            const existingIdx = W.DS_Agent_Plugins.findIndex(p => p.name === pluginName);
+            if (existingIdx >= 0) {
+                W.DS_Agent_Plugins[existingIdx] = pluginObj;
+                return `插件 "${pluginName}" 已更新成功。请直接在当前对话的下一轮调用该插件。`;
+            } else {
+                W.DS_Agent_Plugins.push(pluginObj);
+                return `插件 "${pluginName}" 注册成功！请直接在当前对话的下一轮调用该插件。`;
+            }
 
         } catch (e) {
             throw new ToolError('编译插件', e.message || String(e), '请确保 plugin_js 是合法的 JavaScript 对象字面量');
