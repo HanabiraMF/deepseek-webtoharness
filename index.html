@@ -315,21 +315,25 @@
             
             <div class="tech-card">
                 <h3>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    对话提取：打破上下文限制
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M3 15h6"/><path d="M6 12v6"/></svg>
+                    开发者永久拓展
                 </h3>
-                <p>当对话太长或发生错误遗忘时，AI 可通过 <code>get_chat_history</code> 插件，直接从网页 DOM 中逆序提取纯净版的聊天记录，瞬间找回记忆。</p>
+                <p>如果你希望某个自定义功能永久保留，只需把这段代码贴进油猴脚本，AI 启动时就会自动学会使用它，永不丢失。</p>
                 <div class="code-window">
                     <div class="code-header">
                         <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
-                        <span style="margin-left: 8px;">get_chat_history.js</span>
+                        <span style="margin-left: 8px;">my_custom_plugin.js</span>
                     </div>
                     <div class="code-content">
-<span class="comment">// 排除折叠 UI 与思考过程，只取核心文本</span>
-<span class="keyword">const</span> clone = item.<span class="func">cloneNode</span>(<span class="keyword">true</span>);
-clone.<span class="func">querySelectorAll</span>(<span class="string">'.ds-fold-list, .ds-think-content'</span>)
-     .<span class="func">forEach</span>(el => el.<span class="func">remove</span>());
-<span class="keyword">const</span> text = clone.<span class="func">innerText</span>.<span class="func">trim</span>();
+<span class="comment">// 直接写死在油猴脚本里即可永久生效</span>
+<span class="keyword">window</span>.DS_Agent_Plugins.<span class="func">push</span>({
+  <span class="keyword">name</span>: <span class="string">'get_weather'</span>,
+  <span class="keyword">description</span>: <span class="string">'获取指定城市的天气'</span>,
+  <span class="keyword">execute</span>: <span class="keyword">async</span> (args) => {
+    <span class="keyword">const</span> res = <span class="keyword">await</span> <span class="func">fetch</span>(<span class="string">`https://api...`</span>);
+    <span class="keyword">return</span> <span class="keyword">await</span> res.<span class="func">text</span>();
+  }
+});
                     </div>
                 </div>
             </div>
