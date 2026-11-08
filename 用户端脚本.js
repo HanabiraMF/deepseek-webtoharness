@@ -191,8 +191,49 @@
         .ds-fold-detail { display: none; margin: 4px 0 0; padding: 8px; background: #000; border-radius: 6px; font-size: 11px; color: #4ade80; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, monospace; overflow: auto; max-height: 300px; }
         /* 结果返回样式微调 */
         .ds-result-label { color: #10b981; }
+        
+        /* 右上角悬浮通知 (Toast) */
+        .ds-toast-container { position: fixed; top: 24px; right: 24px; z-index: 100000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+        .ds-toast { background: var(--dsw-alias-bg-layer-2, #1e1e1e); border: 1px solid #333; border-radius: 8px; padding: 12px 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px; color: #fff; font-size: 13px; font-family: inherit; transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s; opacity: 0; pointer-events: auto; max-width: 350px; word-break: break-all; }
+        .ds-toast.show { transform: translateX(0); opacity: 1; }
+        .ds-toast-icon { flex-shrink: 0; display: flex; }
+        .ds-toast.info .ds-toast-icon { color: #3b82f6; }
+        .ds-toast.success .ds-toast-icon { color: #4CAF50; }
+        .ds-toast.warning .ds-toast-icon { color: #eab308; }
+        .ds-toast.error .ds-toast-icon { color: #d32f2f; }
+        .ds-toast-message { line-height: 1.4; }
     `;
     document.head.appendChild(styleEl);
+
+    // ===== 右上角悬浮通知 =====
+    let toastContainer = null;
+    function showToast(type, message, duration = 3000) {
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.className = 'ds-toast-container';
+            document.body.appendChild(toastContainer);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `ds-toast ${type}`;
+        
+        let icon = I.check;
+        if (type === 'warning') icon = I.warning;
+        if (type === 'error') icon = I.close;
+        if (type === 'info') icon = I.question;
+
+        toast.innerHTML = `<span class="ds-toast-icon">${icon}</span><span class="ds-toast-message">${esc(message)}</span>`;
+        toastContainer.appendChild(toast);
+
+        // 强制回流后显示动画
+        void toast.offsetWidth;
+        toast.classList.add('show');
+
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
 
     function getInitPrompt(absPath, taskGoal) {
         return `【系统指令：本地工作区智能体】
@@ -1596,6 +1637,9 @@ ${getPluginsPrompt()}
                 : `[失败] ${op}\n原因: ${e.message}\n参数: ${describeParams(call)}`;
             toolcallStatusMap.set(sig, isCancel ? 'queue' : 'error');
             updateFoldUI();
+            if (!isCancel) {
+                showToast('error', `[失败] ${op} 执行出错`, 4000);
+            }
             return { op, path: call.path, status: isCancel ? 'cancel' : 'error', msg: detailed };
         }
     }
@@ -1658,15 +1702,15 @@ ${getPluginsPrompt()}
             processingStart = Date.now();
             const sec = Math.round(BATCH_COOLDOWN_MS / 1000);
             log(`⚠ 已连续执行 ${toolcallCounter} 个工具，暂停 ${sec}s 冷却后再继续（防频率限制）`);
-            for (let i = sec; i > 0; i--) {
-                dsSetStatus('working', `防封控冷却中 ${i}s`);
-                await sleep(1000);
-            }
+            dsSetStatus('working', `防封控冷却中 ${sec}s`);
+            showToast('warning', `频率保护：已连续执行 ${toolcallCounter} 个工具，暂停 ${sec} 秒冷却...`, 3000);
+            await sleep(BATCH_COOLDOWN_MS);
             toolcallCounter = 0;
             isCoolingDown = false;
             isProcessing = false;
             processingStart = 0;
             log('冷却结束，继续执行');
+            showToast('success', '冷却结束，继续执行任务', 2000);
         }
 
         isProcessing = true;
