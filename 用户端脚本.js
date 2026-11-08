@@ -231,7 +231,7 @@
 【核心规则】
 1. 【第一铁律】每一次工具调用，必须把完整的 <toolcall> 包裹在 \`\`\`toolcall 代码块中。绝对禁止输出裸 XML。不包代码块 = 调用失败。
 2. 【绝对真实】任何目录结构、文件内容、命令结果必须通过工具获取，严禁编造或凭记忆作答。看不到就调工具看。
-3. 【先读后写】修改文件前，必须先 openfile 读取当前内容，再 edit。禁止盲目覆盖。
+3. 【先读后写】修改文件���，必须先 openfile 读取当前内容，再 edit。禁止盲目覆盖。
 4. 【自动备份】writefile / edit / editline / append / replaceall 执行前，系统会自动生成 .bak 备份，可放心操作。
 5. 【批量执行】多个互不依赖的操作（读多个文件、跑多条命令），请在同一个回复里输出多个 toolcall 代码块，系统会按顺序执行并一次性返回全部结果。这比一个个来快得多。
 6. 【严谨传参】路径一律用相对路径；参数值含特殊字符（引号、&、<、>、换行）时用 <![CDATA[...]]> 包裹；edit 的 old 必须与文件内容完全一致且唯一。
@@ -488,7 +488,7 @@ ${getPluginsPrompt()}
             if (ta) break;
             await sleep(100);
         }
-        if (!ta) return { ok: false, reason: '找不到输入框（页面可能未就绪）' };
+        if (!ta) return { ok: false, reason: '找不到输入���（页面可能未就绪）' };
 
         const Proto = W.HTMLTextAreaElement ? W.HTMLTextAreaElement.prototype : HTMLTextAreaElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(Proto, 'value')?.set;
@@ -738,19 +738,31 @@ ${getPluginsPrompt()}
         clone.querySelectorAll('.ds-think-content').forEach(el => el.remove());
         clone.querySelectorAll('.ds-fold-list').forEach(el => el.remove()); // 移除新加的折叠 DOM 防干扰
         const rawTexts = [];
-        // 只提取 pre 标签内的文本，彻底放弃对裸文本的兜底，防止思考过程或正文被误识别
-        clone.querySelectorAll('pre').forEach(b => rawTexts.push(b.textContent));
+        const invalidTexts = [];
+        
+        // 只提取 pre 标签内的文本
+        clone.querySelectorAll('pre').forEach(pre => {
+            const rawText = pre.textContent;
+            if (!rawText.includes('<toolcall>')) return;
+            
+            // 检查是不是真正的 Markdown 代码块
+            const isCodeBlock = !!pre.closest('.md-code-block');
+            if (isCodeBlock) {
+                rawTexts.push(rawText);
+            } else {
+                invalidTexts.push(rawText);
+            }
+        });
 
         const calls = [];
         for (const rawText of rawTexts) {
-            if (!rawText.includes('<toolcall>')) continue;
             const matches = rawText.match(/<toolcall>[\s\S]*?<\/toolcall>/g) || [];
             for (const tcStr of matches) {
                 const c = extractCallFromRaw(tcStr);
                 if (c) calls.push(c);
             }
         }
-        return calls;
+        return { calls, invalidTexts };
     }
 
     class ToolError extends Error {
@@ -1079,7 +1091,7 @@ ${getPluginsPrompt()}
     }
 
     async function toolPreview(call, msgEl) {
-        if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
+        if (!call.path) throw new ToolError('参数校验', '�����少 path', '');
         const rd = await fsCall('read', { path: call.path });
         if (!rd.ok) throw new ToolError('检查路径', `文件不存在: ${call.path}`, rd.error);
         const c = rd.result;
@@ -1377,14 +1389,16 @@ ${getPluginsPrompt()}
     }
 
     function packResults(results) {
-        let text = '【系统执行结果】\n';
+        let text = "【系统执行结果】\n";
         for (const r of results) {
-            const tag = r.status === 'error' ? '[失败]' : (r.status === 'cancel' ? '[取消]' : '[成功]');
-            text += `${tag} ${r.op}${r.path ? ` (${r.path})` : ''}:\n${r.msg}\n\n`;
+            const tag = r.status === "error" ? "[失败]" : (r.status === "cancel" ? "[取消]" : "[成功]");
+            text += tag + " " + r.op + (r.path ? " (" + r.path + ")" : "") + ":" + "\n" + r.msg + "\n\n";
         }
-        text += '⚠️ 【格式警告】下一步调用工具时，请务必、一定、必须把完整的 <toolcall> 放进 ```toolcall 代码块中！不要只输出裸标签！';
+        text += "⚠️ 【强制格式警告】系统已开启严格模式：任何没有用 ```toolcall 代码块包裹的裸 XML 都会被直接拒绝执行。";
+        text += "下次调用必须严格使用如下格式（缺代码块 = 失败）：\n```toolcall\n<toolcall>\n  <op>工具名</op>\n  <参数>值</参数>\n</toolcall>\n```";
         return text;
     }
+
 
     async function tryProcess() {
         // 扫描所有已结束的 assistant 消息，收集其中尚未执行的 toolcall
@@ -1397,7 +1411,27 @@ ${getPluginsPrompt()}
             if (!key) continue;
             const st = msgStore.get(key);
             if (!st || !st.done) continue;
-            const allCalls = parseToolcalls(item);
+            const parsed = parseToolcalls(item);
+            if (parsed.invalidTexts && parsed.invalidTexts.length > 0) {
+                // 发现裸 XML：拦截并报错
+                const sig = '__invalid_format__' + item.getAttribute('data-virtual-list-item-key');
+                if (!st.sigs.has(sig)) {
+                    st.sigs.add(sig);
+                    toExec.push({ 
+                        call: { op: '__format_error__', path: '' }, 
+                        st, sig, item,
+                        customResult: {
+                            op: '__format_error__',
+                            path: '',
+                            status: 'error',
+                            msg: '[格式错误] 本次调用被拒绝！\n\n你输出了没有用 ```toolcall 代码块包裹的裸 XML。系统强制要求：每一次工具调用，必须把完整的 <toolcall> 包裹在 ```toolcall 代码块中。请修正格式后重发。'
+                        }
+                    });
+                }
+                continue; // 忽略解析出的正常 calls
+            }
+
+            const allCalls = parsed.calls;
             if (!allCalls.length) continue;
             for (const call of allCalls) {
                 const sig = toolcallSignature(call);
@@ -1436,6 +1470,14 @@ ${getPluginsPrompt()}
             const call = entry.call;
             const sig = entry.sig;
             const st = entry.st;
+            
+            if (entry.customResult) {
+                st.sigs.add(sig);
+                log(`→ error: 发现裸 XML 格式错误`);
+                results.push(entry.customResult);
+                continue;
+            }
+
             toolcallCounter++;
             log(`执行 ${call.op} ${displayFor(call)}`);
             let result;
