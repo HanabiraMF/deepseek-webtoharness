@@ -807,7 +807,7 @@ ${getPluginsPrompt()}
             while ((mm = re.exec(om[1])) !== null) options.push(mm[1].trim());
         }
         // 提取所有自定义标签存入 extraArgs（排除已知的核心标签）
-        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option']);
+        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js']);
         const extraArgs = {};
         const tagRegex = /<([a-zA-Z0-9_]+)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
         let match;
@@ -832,6 +832,7 @@ ${getPluginsPrompt()}
             path1: extractTag(tcStr, 'path1'), path2: extractTag(tcStr, 'path2'),
             method: (extractTag(tcStr, 'method') || 'GET').toUpperCase(),
             headers: extractTag(tcStr, 'headers'), text: extractTag(tcStr, 'text'), options,
+            plugin_name: extractTag(tcStr, 'plugin_name'), plugin_js: extractTag(tcStr, 'plugin_js'),
             extraArgs
         };
     }
@@ -1483,15 +1484,18 @@ ${getPluginsPrompt()}
     }
 
     async function toolRegisterPlugin(call) {
-        if (!call.plugin_name || !call.plugin_js) {
+        const name = call.plugin_name || (call.extraArgs && call.extraArgs.plugin_name);
+        const jsCode = call.plugin_js || (call.extraArgs && call.extraArgs.plugin_js);
+
+        if (!name || !jsCode) {
             throw new ToolError('参数校验', '缺少 plugin_name 或 plugin_js', '请提供插件名称和执行代码');
         }
-        const pluginName = call.plugin_name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+        const pluginName = name.toLowerCase().replace(/[^a-z0-9_]/g, '');
         if (!pluginName) throw new ToolError('参数校验', 'plugin_name 格式非法', '只能包含字母、数字和下划线');
 
         try {
             // 用 Function 执行 AI 写的代码，返回一个 JS 对象 { name, description, execute }
-            const factory = new Function(`return (${call.plugin_js});`);
+            const factory = new Function(`return (${jsCode});`);
             const pluginObj = factory();
 
             if (typeof pluginObj !== 'object' || typeof pluginObj.execute !== 'function') {
