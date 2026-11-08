@@ -55,20 +55,28 @@ function pickFolderNative() {
     return new Promise((resolve) => {
         const { execFile } = require('child_process');
         if (process.platform === 'win32') {
-            // FolderBrowserDialog，且置顶
-            const ps = [
-                'Add-Type -AssemblyName System.Windows.Forms;',
-                '$d = New-Object System.Windows.Forms.FolderBrowserDialog;',
-                "$d.Description = '请选择 AI 工作区目录';",
-                "$d.RootFolder = 'MyComputer';",
-                '$f = New-Object System.Windows.Forms.Form;',
-                '$f.TopMost = $true;',
-                "$null = $d.ShowDialog($f);",
-                'if ($d.SelectedPath) { Write-Output $d.SelectedPath }'
-            ].join(' ');
-            execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', ps],
+            const os = require('os');
+            const psScript = `
+Add-Type -AssemblyName System.Windows.Forms
+$f = New-Object System.Windows.Forms.OpenFileDialog
+$f.ValidateNames = $false
+$f.CheckFileExists = $false
+$f.CheckPathExists = $true
+$f.FileName = "点击打开即选中当前文件夹"
+$f.Filter = "所有文件 (*.*)|*.*"
+$f.Title = "请选择 AI 工作区目录"
+if ($f.ShowDialog() -eq 'OK') {
+    $path = Split-Path -Path $f.FileName -Parent
+    if ($path) { Write-Output $path } else { Write-Output $f.FileName }
+}
+`;
+            const tmpFile = path.join(os.tmpdir(), 'ds_pick_folder_' + Date.now() + '.ps1');
+            try { fs.writeFileSync(tmpFile, psScript, 'utf8'); } catch (e) { return resolve({ ok: false, error: e.message }); }
+            
+            execFile('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', tmpFile],
                 { timeout: 300000, windowsHide: true },
                 (err, stdout) => {
+                    try { fs.unlinkSync(tmpFile); } catch {}
                     if (err) return resolve({ ok: false, error: err.message });
                     const p = String(stdout || '').trim();
                     if (!p) return resolve({ ok: false, error: '用户取消或未选择' });
@@ -152,11 +160,14 @@ const server = http.createServer(async (req, res) => {
         res.end();
         return;
     }
-    if (!checkOrigin(req) || !checkToken(req)) return sendJson(res, 403, { error: 'Forbidden' });
+    // 鉴权检查下移到 pathname 解析之后（/workspace 与 /workspace/pick 免 Token）
 
     let pathname;
     try { pathname = new URL(req.url, `http://127.0.0.1:${PORT}`).pathname; }
     catch { return sendJson(res, 400, { error: 'Bad URL' }); }
+
+    const isPublic = (pathname === '/workspace' || pathname === '/workspace/pick');
+    if (!checkOrigin(req) || (!isPublic && !checkToken(req))) return sendJson(res, 403, { error: 'Forbidden' });
 
     if ((req.method === 'POST' || req.method === 'GET') && pathname === '/workspace') {
         // 只读取当前工作区，不弹框

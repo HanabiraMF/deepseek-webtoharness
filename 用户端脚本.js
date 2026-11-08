@@ -1621,7 +1621,7 @@ ${getPluginsPrompt()}
                 <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
                     <span style="font-size:11px;color:#888;line-height:1.4;">工作区目录（AI 将在此目录下操作文件）:</span>
                     <div style="display:flex;gap:6px;align-items:flex-start;">
-                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#4CAF50;word-break:break-all;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
+                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#4CAF50;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
                         <button id="ds-pick-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;padding:4px 10px;font-size:11px;">选择目录</button>
                     </div>
                     <span style="font-size:11px;color:#888;line-height:1.4;margin-top:4px;">本地服务 Token（server 启动时打印，可选）:</span>
@@ -1697,12 +1697,13 @@ ${getPluginsPrompt()}
                 }
                 absPath = data.cwd;
                 workspacePathEl.textContent = absPath;
+                workspacePathEl.title = absPath;
                 dsSetStatus('working', '目录已选定');
                 log(`工作区: ${absPath}`);
                 return true;
             } catch (e) {
+                log('选择目录失败: ' + e.message);
                 dsSetStatus('none', '选择失败');
-                alert('选择目录失败：' + e.message + '\n请确认本地服务正在运行。');
                 return false;
             } finally {
                 pickBtn.disabled = false;
@@ -1732,7 +1733,8 @@ ${getPluginsPrompt()}
                         workspacePathEl.textContent = '（需填写正确 Token 后才能获取）';
                     }
                 } catch (e) {
-                    workspacePathEl.textContent = '（无法连接本地服务）';
+                    workspacePathEl.textContent = '（无法连接服务）';
+                    workspacePathEl.title = '无法连接服务';
                 }
                 return;
             }
@@ -1752,7 +1754,7 @@ ${getPluginsPrompt()}
                     if (!data.cwd) throw new Error('后端返回为空');
                     absPath = data.cwd;
                 } catch (e) {
-                    alert('无法连接本地服务：' + e.message + '\n请确认 server.js 正在运行、Token 正确。');
+                    log('无法连接本地服务: ' + e.message);
                     dsSetStatus('none', '连接失败');
                     return;
                 }
