@@ -31,7 +31,6 @@
         circleSpin: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" class="ds-svg ds-spin"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-opacity="0.25" stroke-width="1.5"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
     };
 
-    let dirHandle = null, tempDirHandle = null;
     let isModeOn = false, step = 0;
     let isProcessing = false, isCooldown = false, isCompressing = false;
     let awaitingUser = false; // 弹窗等待用户点击期间：不限时、不强制复位
@@ -240,7 +239,7 @@
 7. 【禁区】严禁删除、覆写或破坏 server.js 和 plugins/ 目录（包括其中任何插件文件）。它们承载着本地互联的基础设施，除非用户在当前对话中明确要求删除，否则一律不得触碰。
 
 【工作区信息】
-绝对路径：${absPath}
+绝对路径：${absPath}（即后端 server.js 启动所在目录，所有文件工具均在此目录下执行）
 当前目标：${taskGoal}
 
 【输出格式强制要求】
@@ -358,216 +357,6 @@ ${getPluginsPrompt()}
         }
     }
 
-    function parsePath(raw) {
-        let p = (raw || '.').trim().replace(/^[`'"“”\s]+|[`'"“”\s]+$/g, '');
-        if (!p) p = '.';
-        p = p.replace(/\\/g, '/');
-        if (absPath) {
-            const norm = absPath.replace(/\\/g, '/').toLowerCase();
-            if (p.toLowerCase().startsWith(norm)) p = p.substring(absPath.length);
-        }
-        p = p.replace(/^[a-zA-Z]:/, '');
-        if (p === '/' || p === '.') return [];
-        const parts = p.split('/').filter(x => x && x !== '.');
-        if (parts.some(x => x === '..')) throw new Error('不允许越权访问（路径含 ..）');
-        return parts.map(x => x.replace(/[<>:"|?*\n\r\t]/g, '').trim()).filter(Boolean);
-    }
-
-    async function getFileHandle(path, create = false) {
-        const parts = parsePath(path);
-        if (!parts.length) throw new Error('根目录不能作为文件');
-        let cur = dirHandle;
-        for (let i = 0; i < parts.length - 1; i++) cur = await cur.getDirectoryHandle(parts[i], { create });
-        return cur.getFileHandle(parts[parts.length - 1], { create });
-    }
-
-    async function getDirHandle(path, create = false) {
-        let cur = dirHandle;
-        for (const part of parsePath(path)) cur = await cur.getDirectoryHandle(part, { create });
-        return cur;
-    }
-
-    async function readFile(path, maxSize = 2 * 1024 * 1024) {
-        const file = await (await getFileHandle(path)).getFile();
-        if (file.size > maxSize) throw new Error(`文件过大 (${(file.size/1024/1024).toFixed(1)}MB)，请用 grep 或分段读取`);
-        return file.text();
-    }
-
-    async function writeFile(path, content) {
-        const fh = await getFileHandle(path, true);
-        const w = await fh.createWritable();
-        await w.write(content);
-        await w.close();
-        return `${path} 写入成功 (${content.length} 字符)`;
-    }
-
-    async function readFileBinary(path, maxSize = 100 * 1024 * 1024) {
-        const file = await (await getFileHandle(path)).getFile();
-        if (file.size > maxSize) throw new Error(`文件过大 (${(file.size/1024/1024).toFixed(1)}MB)，超过上限`);
-        return file.arrayBuffer();
-    }
-
-    async function writeFileBinary(path, buffer) {
-        const fh = await getFileHandle(path, true);
-        const w = await fh.createWritable();
-        await w.write(buffer);
-        await w.close();
-    }
-
-    async function pathInfo(path) {
-        const parts = parsePath(path);
-        if (!parts.length) return { type: 'dir' };
-        let cur = dirHandle;
-        try {
-            for (let i = 0; i < parts.length - 1; i++) cur = await cur.getDirectoryHandle(parts[i]);
-            const name = parts[parts.length - 1];
-            try { await cur.getFileHandle(name); return { type: 'file' }; } catch {}
-            try { await cur.getDirectoryHandle(name); return { type: 'dir' }; } catch {}
-            return null;
-        } catch { return null; }
-    }
-
-    async function deletePath(path, recursive) {
-        const parts = parsePath(path);
-        if (!parts.length) throw new Error('不能删除根目录');
-        let cur = dirHandle;
-        for (let i = 0; i < parts.length - 1; i++) cur = await cur.getDirectoryHandle(parts[i]);
-        await cur.removeEntry(parts[parts.length - 1], { recursive: !!recursive });
-        return `已删除: ${path}`;
-    }
-
-    async function listDir(path) {
-        const cur = await getDirHandle(path);
-        const out = [];
-        for await (const e of cur.values()) out.push(`${e.kind === 'file' ? 'f' : 'd'} ${e.name}`);
-        return out.length ? out.join('\n') : '(空目录)';
-    }
-
-    async function workspaceSnapshot(limit = 30) {
-        try {
-            const items = [];
-            for await (const e of dirHandle.values()) {
-                items.push(`${e.kind === 'file' ? 'f' : 'd'} ${e.name}`);
-                if (items.length >= limit) { items.push('…'); break; }
-            }
-            return items.length ? items.join(', ') : '(空)';
-        } catch { return '(无法读取)'; }
-    }
-
-    async function resolveTarget(from, to) {
-        let target = to, isDir = false;
-        if (/[\/\\]$/.test(to)) isDir = true;
-        else { const info = await pathInfo(to); if (info?.type === 'dir') isDir = true; }
-        if (isDir) target = to.replace(/[\/\\]+$/, '') + '/' + parsePath(from).pop();
-        return target;
-    }
-
-    async function copyDirInto(srcDir, dstDir) {
-        for await (const entry of srcDir.values()) {
-            if (entry.kind === 'file') {
-                const data = await (await entry.getFile()).arrayBuffer();
-                const fh = await dstDir.getFileHandle(entry.name, { create: true });
-                const w = await fh.createWritable();
-                await w.write(data);
-                await w.close();
-            } else {
-                const sub = await dstDir.getDirectoryHandle(entry.name, { create: true });
-                await copyDirInto(entry, sub);
-            }
-        }
-    }
-
-    const SKIP_DIRS = new Set(['.git','node_modules','dist','build','venv','.venv','__pycache__','target','.next','out','.idea','.vscode','obj','bin','debug','release']);
-    const SKIP_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.ico','.exe','.dll','.so','.dylib','.bin','.pdf','.zip','.tar','.gz','.7z','.resources','.baml','.cache','.pyc','.obj','.pdb','.mp4','.mp3','.woff','.woff2','.ttf']);
-    const MAX_FILE = 500 * 1024, MAX_DEPTH = 8, MAX_RESULTS = 200;
-
-    function isBinary(text) {
-        const s = text.slice(0, 1000);
-        if (s.includes('\0')) return true;
-        let n = 0;
-        for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c < 9 || (c > 13 && c < 32)) n++; }
-        return n / Math.max(1, s.length) > 0.1;
-    }
-
-    async function grep(pattern, rootPath = '.') {
-        let re;
-        try { re = new RegExp(pattern, 'i'); } catch (e) { throw new Error(`正则无效: ${e.message}`); }
-        const fileInfo = await pathInfo(rootPath).catch(() => null);
-        if (fileInfo && fileInfo.type === 'file') {
-            const results0 = [];
-            const text = await readFile(rootPath, MAX_FILE);
-            if (!isBinary(text)) {
-                text.split('\n').forEach((line, i) => {
-                    if (results0.length >= MAX_RESULTS) return;
-                    if (re.test(line)) results0.push(`${rootPath}:${i + 1}: ${line.trim().slice(0, 200)}`);
-                });
-            }
-            const suffix0 = results0.length >= MAX_RESULTS ? '\n...(已达上限，请缩小范围)' : '';
-            return results0.length ? results0.join('\n') + suffix0 : '(无匹配)';
-        }
-        const root = await getDirHandle(rootPath);
-        const results = [];
-        async function walk(dir, prefix, depth) {
-            if (depth > MAX_DEPTH || results.length >= MAX_RESULTS) return;
-            for await (const entry of dir.values()) {
-                if (results.length >= MAX_RESULTS) return;
-                const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-                if (entry.kind === 'directory') {
-                    if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-                    await walk(entry, rel, depth + 1);
-                } else {
-                    const ext = '.' + entry.name.split('.').pop().toLowerCase();
-                    if (SKIP_EXTS.has(ext)) continue;
-                    try {
-                        const f = await entry.getFile();
-                        if (f.size > MAX_FILE) continue;
-                        const text = await f.text();
-                        if (isBinary(text)) continue;
-                        text.split('\n').forEach((line, i) => {
-                            if (results.length >= MAX_RESULTS) return;
-                            if (re.test(line)) results.push(`${rel}:${i+1}: ${line.trim().slice(0,200)}`);
-                        });
-                    } catch {}
-                }
-            }
-        }
-        await walk(root, '', 0);
-        const suffix = results.length >= MAX_RESULTS ? '\n...(已达上限，请缩小范围)' : '';
-        return results.length ? results.join('\n') + suffix : '(无匹配)';
-    }
-
-    function globToRegex(pattern) {
-        const parts = pattern.replace(/\\/g, '/').split('/');
-        let re = '';
-        for (let i = 0; i < parts.length; i++) {
-            const seg = parts[i];
-            if (seg === '**') re += (i === parts.length - 1) ? '.*' : '(?:.*\\/)?';
-            else {
-                re += seg.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
-                if (i < parts.length - 1) re += '\\/';
-            }
-        }
-        return new RegExp('^' + re + '$');
-    }
-
-    async function glob(pattern) {
-        const re = globToRegex(pattern);
-        const results = [];
-        async function walk(dir, prefix, depth) {
-            if (depth > MAX_DEPTH || results.length >= MAX_RESULTS) return;
-            for await (const entry of dir.values()) {
-                if (results.length >= MAX_RESULTS) return;
-                const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-                if (entry.kind === 'directory') {
-                    if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-                    await walk(entry, rel, depth + 1);
-                } else if (re.test(rel)) results.push(rel);
-            }
-        }
-        await walk(dirHandle, '', 0);
-        const suffix = results.length >= MAX_RESULTS ? '\n...(已达上限)' : '';
-        return results.length ? results.join('\n') + suffix : '(无匹配)';
-    }
 
     function showConfirmDialog(title, target, reason, extraHtml = '') {
         return new Promise(resolve => {
@@ -1001,42 +790,37 @@ ${getPluginsPrompt()}
         } finally { clearTimeout(timer); }
     }
 
-    async function autoBackup(path) {
-        if (await pathInfo(path).catch(() => null)) {
-            try {
-                const old = await readFile(path);
-                await writeFile(path + '.bak', old);
-            } catch {}
+    // 所有文件操作统一转发到后端 /fs（后端工作区 = 服务启动目录）
+    async function fsCall(op, args) {
+        try {
+            const resp = await agentFetch('/fs', Object.assign({ op }, args || {}), 60000);
+            if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
+            return await resp.json();
+        } catch (e) {
+            return { ok: false, error: e.message || String(e) };
         }
     }
 
     // ================== 工具实现 ==================
     async function toolListdir(call) {
         const p = call.path || '.';
-        const info = await pathInfo(p).catch(e => { throw stepErr('检查路径', e); });
-        if (info?.type === 'file') throw new ToolError('检查路径', `"${p}" 是文件不是目录`, '请用 openfile 读取');
-        let listing;
-        try { listing = await listDir(p); }
-        catch (e) { throw stepErr(`列出目录 "${p}"`, e, '请确认目录存在，可先 listdir "." 查看根目录'); }
-        return `目录 ${p}:\n${listing}`;
+        const r = await fsCall('listdir', { path: p });
+        if (!r.ok) throw new ToolError('列出目录', r.error, '请确认目录存在，可先 listdir "." 查看根目录');
+        return `目录 ${p}:\n${r.result}`;
     }
 
     async function toolOpenfile(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '请在 <path> 中提供文件路径');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `文件不存在: ${call.path}`, `工作区根目录: ${await workspaceSnapshot()}`);
-        if (info.type === 'dir') throw new ToolError('检查路径', `"${call.path}" 是目录`, '请用 listdir');
-        let text;
-        try { text = await readFile(call.path); } catch (e) { throw stepErr('读取文件', e); }
-        const truncated = text.length > 8000;
-        return `文件 ${call.path}${truncated ? `（前 8000 字符，共 ${text.length}）` : ''}:\n\`\`\`\n${text.slice(0, 8000)}\n\`\`\``;
+        const r = await fsCall('openfile', { path: call.path });
+        if (!r.ok) throw new ToolError('读取文件', r.error, '请先 listdir 确认文件存在');
+        return r.result;
     }
 
     async function toolMkdir(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        try { await getDirHandle(call.path, true); }
-        catch (e) { throw stepErr('创建目录', e); }
-        return `已创建目录: ${call.path}`;
+        const r = await fsCall('mkdir', { path: call.path });
+        if (!r.ok) throw new ToolError('创建目录', r.error, '');
+        return r.result;
     }
 
     async function toolAppend(call, reason) {
@@ -1046,43 +830,43 @@ ${getPluginsPrompt()}
             if (!await showConfirmDialog('追加内容', call.path, reason, `<div style="background:#000;padding:8px;color:#4ade80;max-height:150px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">${esc(call.content.slice(0, 500))}</div>`))
                 throw new ToolError('用户确认', '用户取消了追加', '');
         }
-        try {
-            await autoBackup(call.path);
-            let old = '';
-            if (await pathInfo(call.path)) old = await readFile(call.path);
-            await writeFile(call.path, old + call.content);
-        } catch (e) { throw stepErr('追加写入', e); }
-        return `追加成功: ${call.path}`;
+        const r = await fsCall('append', { path: call.path, content: call.content });
+        if (!r.ok) throw new ToolError('追加写入', r.error, '');
+        return r.result;
     }
 
     async function toolGrep(call) {
         if (!call.pattern) throw new ToolError('参数校验', '缺少 pattern', '请在 <pattern> 中提供正则');
-        try { return `grep "${call.pattern}" @ ${call.path || '.'}:\n${await grep(call.pattern, call.path || '.')}`; }
-        catch (e) { throw stepErr('搜索', e, '检查正则语法是否正确；目录不存在可先 listdir'); }
+        const r = await fsCall('grep', { pattern: call.pattern, path: call.path || '.' });
+        if (!r.ok) throw new ToolError('搜索', r.error, '检查正则语法是否正确；目录不存在可先 listdir');
+        return `grep "${call.pattern}" @ ${call.path || '.'}:\n${r.result}`;
     }
 
     async function toolGlob(call) {
         if (!call.pattern) throw new ToolError('参数校验', '缺少 pattern', '例如 **/*.js');
-        try { return `glob "${call.pattern}":\n${await glob(call.pattern)}`; }
-        catch (e) { throw stepErr('文件名匹配', e); }
+        const r = await fsCall('glob', { pattern: call.pattern });
+        if (!r.ok) throw new ToolError('文件名匹配', r.error, '');
+        return `glob "${call.pattern}":\n${r.result}`;
     }
 
     async function toolWritefile(call, reason) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
         if (call.content === undefined || call.content === null) throw new ToolError('参数校验', '缺少 content', '请在 <content> 中提供文件内容');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (info?.type === 'dir') throw new ToolError('检查路径', `"${call.path}" 是目录，不能写入`, '请提供文件路径');
-        if (info && !autoMode) {
-            let oldContent = '';
-            try { oldContent = await readFile(call.path); } catch {}
-            const preview = `<div style="display:flex;gap:8px;margin-top:8px;"><div style="flex:1;background:#000;padding:8px;color:#f87171;max-height:150px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">旧:\n${esc(oldContent.slice(0, 500))}</div><div style="flex:1;background:#000;padding:8px;color:#4ade80;max-height:150px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">新:\n${esc(call.content.slice(0, 500))}</div></div>`;
-            if (!await showConfirmDialog('覆盖文件', call.path, reason, preview))
-                throw new ToolError('用户确认', '用户取消了写入', '');
+        if (!autoMode) {
+            const st = await fsCall('stat', { path: call.path });
+            if (st.ok) {
+                if (st.result.startsWith('类型: 目录')) throw new ToolError('检查路径', `"${call.path}" 是目录，不能写入`, '请提供文件路径');
+                let oldContent = '';
+                const rd = await fsCall('read', { path: call.path });
+                if (rd.ok) oldContent = rd.result;
+                const preview = `<div style="display:flex;gap:8px;margin-top:8px;"><div style="flex:1;background:#000;padding:8px;color:#f87171;max-height:150px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">旧:\n${esc(oldContent.slice(0, 500))}</div><div style="flex:1;background:#000;padding:8px;color:#4ade80;max-height:150px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">新:\n${esc(call.content.slice(0, 500))}</div></div>`;
+                if (!await showConfirmDialog('覆盖文件', call.path, reason, preview))
+                    throw new ToolError('用户确认', '用户取消了写入', '');
+            }
         }
-        try {
-            await autoBackup(call.path);
-            return await writeFile(call.path, call.content);
-        } catch (e) { throw stepErr('写入文件', e, '请确认父目录存在（可先 listdir 或 mkdir），路径不能是目录'); }
+        const r = await fsCall('writefile', { path: call.path, content: call.content });
+        if (!r.ok) throw new ToolError('写入文件', r.error, '请确认父目录存在（可先 listdir 或 mkdir），路径不能是目录');
+        return r.result;
     }
 
     async function toolEdit(call, reason) {
@@ -1091,12 +875,9 @@ ${getPluginsPrompt()}
         if (!oldStr) throw new ToolError('参数校验', '缺少 old（原内容，不能为空）', '');
         if (newStr === undefined) throw new ToolError('参数校验', '缺少 new（新内容，可为空）', '');
 
-        const info = await pathInfo(path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `文件不存在: ${path}`, `根目录: ${await workspaceSnapshot()}`);
-        if (info.type === 'dir') throw new ToolError('检查路径', `"${path}" 是目录`, '请用 openfile');
-
-        let original;
-        try { original = await readFile(path); } catch (e) { throw stepErr('读取文件', e); }
+        const rd = await fsCall('read', { path });
+        if (!rd.ok) throw new ToolError('检查路径', rd.error, '请先 listdir 确认文件存在');
+        const original = rd.result;
 
         const firstIdx = original.indexOf(oldStr);
         if (firstIdx === -1) {
@@ -1128,10 +909,8 @@ ${getPluginsPrompt()}
                 throw new ToolError('用户确认', '用户取消了编辑', '');
         }
 
-        try {
-            await autoBackup(path);
-            await writeFile(path, original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length));
-        } catch (e) { throw stepErr('写入文件', e); }
+        const wr = await fsCall('writefile', { path, content: original.slice(0, firstIdx) + newStr + original.slice(firstIdx + oldStr.length) });
+        if (!wr.ok) throw new ToolError('写入文件', wr.error, '');
         return `替换成功（第 ${lineNo} 行，${oldStr.length} 字符 → ${newStr.length} 字符）`;
     }
 
@@ -1142,12 +921,9 @@ ${getPluginsPrompt()}
         if (isNaN(lineNo) || lineNo < 1) throw new ToolError('参数校验', 'line 必须为正整数', '');
         if (mode !== 'delete' && content === undefined) throw new ToolError('参数校验', '缺少 content', '');
 
-        const info = await pathInfo(path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info || info.type === 'dir') throw new ToolError('检查路径', `文件不存在或不是文件: ${path}`, '');
-
-        let original;
-        try { original = await readFile(path); } catch (e) { throw stepErr('读取文件', e); }
-        const lines = original.split('\n');
+        const rd = await fsCall('read', { path });
+        if (!rd.ok) throw new ToolError('检查路径', `文件不存在或不是文件: ${path}`, rd.error);
+        const lines = rd.result.split('\n');
         const idx = lineNo - 1;
 
         if (mode === 'replace') lines[idx] = content;
@@ -1162,10 +938,8 @@ ${getPluginsPrompt()}
                 throw new ToolError('用户确认', '用户取消了按行编辑', '');
         }
 
-        try {
-            await autoBackup(path);
-            await writeFile(path, lines.join('\n'));
-        } catch (e) { throw stepErr('写入文件', e); }
+        const wr = await fsCall('writefile', { path, content: lines.join('\n') });
+        if (!wr.ok) throw new ToolError('写入文件', wr.error, '');
         return `已执行 ${mode} (第 ${lineNo} 行)`;
     }
 
@@ -1173,74 +947,25 @@ ${getPluginsPrompt()}
         if (!call.find) throw new ToolError('参数校验', '缺少 find', '');
         if (call.replace === undefined) throw new ToolError('参数校验', '缺少 replace', '');
         const target = call.path || '.';
-        const info = await pathInfo(target).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `目标不存在: ${target}`, '');
-
-        let replacedFiles = 0, replacedCount = 0;
-
-        async function processFile(relPath, fileEntry) {
-            if (/\.bak$/i.test(relPath)) return;
-            const file = await fileEntry.getFile();
-            if (file.size > MAX_FILE) return;
-            const text = await file.text();
-            if (isBinary(text)) return;
-            if (!text.includes(call.find)) return;
-
-            const parts = text.split(call.find);
-            const count = parts.length - 1;
-            if (count === 0) return;
-
-            if (!autoMode) {
-                const preview = `<div style="font-size:11px;color:#888;">文件：${relPath}，替换次数：${count}</div>`;
-                if (!await showConfirmDialog('批量替换', target, reason, preview))
-                    throw new ToolError('用户确认', '用户取消了批量替换', '');
-            }
-
-            try {
-                await autoBackup(relPath);
-                await writeFile(relPath, parts.join(call.replace));
-            } catch (e) {
-                throw stepErr(`写回 ${relPath}`, e, '确认目录下文件可写、未被占用');
-            }
-            replacedFiles++;
-            replacedCount += count;
+        if (!autoMode) {
+            if (!await showConfirmDialog('批量替换', target, reason, `<div style="font-size:11px;color:#888;">将把 "${esc(call.find)}" 替换为 "${esc(String(call.replace))}"</div>`))
+                throw new ToolError('用户确认', '用户取消了批量替换', '');
         }
-
-        if (info.type === 'file') {
-            const fh = await getFileHandle(target);
-            await processFile(target, fh);
-        } else {
-            const prefix0 = parsePath(target).join('/');
-            async function walk(dir, prefix, depth) {
-                if (depth > MAX_DEPTH) return;
-                for await (const entry of dir.values()) {
-                    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-                    if (entry.kind === 'directory') {
-                        if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-                        await walk(entry, rel, depth + 1);
-                    } else {
-                        if (/\.bak$/i.test(entry.name)) continue;
-                        const ext = '.' + entry.name.split('.').pop().toLowerCase();
-                        if (SKIP_EXTS.has(ext)) continue;
-                        await processFile(rel, entry);
-                    }
-                }
-            }
-            await walk(await getDirHandle(target), prefix0, 0);
-        }
-
-        return `批量替换完成：${replacedFiles} 个文件，共 ${replacedCount} 处`;
+        const r = await fsCall('replaceall', { path: target, find: call.find, replace: call.replace });
+        if (!r.ok) throw new ToolError('批量替换', r.error, '确认目录下文件可写、未被占用');
+        return r.result;
     }
 
     async function toolDel(call, reason) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `路径不存在: ${call.path}`, `根目录: ${await workspaceSnapshot()}`);
-        if (!autoMode && !await showConfirmDialog(info.type === 'dir' ? '删除目录' : '删除文件', call.path, reason))
+        const st = await fsCall('stat', { path: call.path });
+        if (!st.ok) throw new ToolError('检查路径', `路径不存在: ${call.path}`, st.error);
+        const isDir = st.result.startsWith('类型: 目录');
+        if (!autoMode && !await showConfirmDialog(isDir ? '删除目录' : '删除文件', call.path, reason))
             throw new ToolError('用户确认', '用户取消了删除', '');
-        try { await deletePath(call.path, info.type === 'dir'); }
-        catch (e) { throw stepErr(`删除${info.type === 'dir' ? '目录' : '文件'}`, e, info.type === 'dir' ? '目录非空需递归删除，或先用 exec' : ''); }
-        return `已删除 ${info.type === 'dir' ? '目录' : '文件'}: ${call.path}`;
+        const r = await fsCall('del', { path: call.path });
+        if (!r.ok) throw new ToolError('删除', r.error, '目录非空需递归删除，或先用 exec');
+        return r.result;
     }
 
     async function toolExec(call, reason, silent = true) {
@@ -1271,152 +996,39 @@ ${getPluginsPrompt()}
         const { from, to } = call;
         if (!from) throw new ToolError('参数校验', '缺少 from（源路径）', '');
         if (!to) throw new ToolError('参数校验', '缺少 to（目标路径）', '');
-
-        const fromInfo = await pathInfo(from).catch(e => { throw stepErr('检查源路径', e); });
-        if (!fromInfo) throw new ToolError('检查源路径', `源路径不存在: ${from}`, `工作区根目录: ${await workspaceSnapshot()}`);
-
-        const target = await resolveTarget(from, to);
-        if (target === from) throw new ToolError('检查目标路径', '源与目标是同一个路径', '无需移动');
-        const toInfo = await pathInfo(target).catch(() => null);
-        if (toInfo) throw new ToolError('检查目标路径', `目标已存在: ${target}（${toInfo.type}）`, '请更换目标名，或先 del 删除目标');
-
-        if (fromInfo.type === 'file') {
-            let nativeOk = false;
-            try {
-                const fh = await getFileHandle(from);
-                if (typeof fh.move === 'function') {
-                    const parts = parsePath(target);
-                    const newName = parts.pop();
-                    const newDir = parts.length ? await getDirHandle(parts.join('/'), true) : dirHandle;
-                    await fh.move(newDir, newName);
-                    nativeOk = true;
-                }
-            } catch (e) {
-                log(`原生 move 失败（${e.message}），回退到 读→写→删`);
-            }
-            if (nativeOk) return `已移动 ${from} → ${target}（原生 rename）`;
-
-            let data;
-            try { data = await readFileBinary(from); }
-            catch (e) { throw stepErr(`第1步 读取源文件 "${from}"`, e, '请先 stat 确认文件存在且可读'); }
-
-            try { await writeFileBinary(target, data); }
-            catch (e) { throw stepErr(`第2步 写入目标 "${target}"`, e, '检查目标父目录是否存在、是否可写'); }
-
-            try {
-                const f = await (await getFileHandle(target)).getFile();
-                if (f.size !== data.byteLength) {
-                    await deletePath(target, false).catch(() => {});
-                    throw new ToolError('第2步 校验目标', `大小不符: 预期 ${data.byteLength} 实际 ${f.size}`, '已回滚目标文件');
-                }
-            } catch (e) {
-                if (e instanceof ToolError) throw e;
-                await deletePath(target, false).catch(() => {});
-                throw stepErr('第2步 校验目标', e, '已回滚目标文件');
-            }
-
-            try { await deletePath(from, false); }
-            catch (e) {
-                await deletePath(target, false).catch(() => {});
-                throw stepErr(`第3步 删除源文件 "${from}"`, e, '目标已回滚，源文件仍在原处');
-            }
-            return `已移动 ${from} → ${target}（${data.byteLength} 字节）`;
-        }
-
-        try {
-            const srcDir = await getDirHandle(from);
-            const parts = parsePath(target);
-            const name = parts.pop();
-            const parent = parts.length ? await getDirHandle(parts.join('/'), true) : dirHandle;
-            if (typeof srcDir.move === 'function') {
-                await srcDir.move(parent, name);
-                return `已移动目录 ${from} → ${target}（原生）`;
-            }
-            const dst = await parent.getDirectoryHandle(name, { create: true });
-            await copyDirInto(srcDir, dst);
-            await deletePath(from, true);
-            return `已移动目录 ${from} → ${target}（递归复制+删除）`;
-        } catch (e) {
-            if (e instanceof ToolError) throw e;
-            throw stepErr('移动目录', e, '可尝试先 copy 再 del');
-        }
+        const r = await fsCall('move', { from, to });
+        if (!r.ok) throw new ToolError('移动', r.error, '可尝试先 copy 再 del');
+        return r.result;
     }
 
     async function toolCopy(call) {
         const { from, to } = call;
         if (!from) throw new ToolError('参数校验', '缺少 from', '');
         if (!to) throw new ToolError('参数校验', '缺少 to', '');
-
-        const srcInfo = await pathInfo(from).catch(e => { throw stepErr('检查源路径', e); });
-        if (!srcInfo) throw new ToolError('检查源路径', `源路径不存在: ${from}`, `工作区根目录: ${await workspaceSnapshot()}`);
-
-        const target = await resolveTarget(from, to);
-        if (target === from) throw new ToolError('检查目标路径', '源与目标是同一个路径', '');
-        if (await pathInfo(target).catch(() => null))
-            throw new ToolError('检查目标路径', `目标已存在: ${target}`, '请更换目标名，或先 del');
-
-        if (srcInfo.type === 'file') {
-            let data;
-            try { data = await readFileBinary(from); }
-            catch (e) { throw stepErr(`读取源文件 "${from}"`, e); }
-            try { await writeFileBinary(target, data); }
-            catch (e) { throw stepErr(`写入目标 "${target}"`, e, '检查父目录是否存在'); }
-            return `已复制 ${from} → ${target}（${data.byteLength} 字节）`;
-        }
-
-        try {
-            const srcDir = await getDirHandle(from);
-            const parts = parsePath(target);
-            const name = parts.pop();
-            const parent = parts.length ? await getDirHandle(parts.join('/'), true) : dirHandle;
-            const dst = await parent.getDirectoryHandle(name, { create: true });
-            await copyDirInto(srcDir, dst);
-            return `已复制目录 ${from} → ${target}`;
-        } catch (e) {
-            if (e instanceof ToolError) throw e;
-            throw stepErr('复制目录', e);
-        }
+        const r = await fsCall('copy', { from, to });
+        if (!r.ok) throw new ToolError('复制', r.error, '检查父目录是否存在');
+        return r.result;
     }
 
     async function toolStat(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `路径不存在: ${call.path}`, `根目录: ${await workspaceSnapshot()}`);
-        if (info.type === 'dir') return `类型: 目录\n路径: ${call.path}`;
-        try {
-            const file = await (await getFileHandle(call.path)).getFile();
-            return `类型: 文件\n路径: ${call.path}\n大小: ${(file.size/1024).toFixed(2)} KB (${file.size} 字节)\n修改时间: ${new Date(file.lastModified).toLocaleString()}`;
-        } catch (e) { throw stepErr('读取文件信息', e); }
+        const r = await fsCall('stat', { path: call.path });
+        if (!r.ok) throw new ToolError('检查路径', `路径不存在: ${call.path}`, r.error);
+        return r.result;
     }
 
     async function toolDiff(call) {
         if (!call.path1 || !call.path2) throw new ToolError('参数校验', '需要 path1 和 path2', '');
-        let t1, t2;
-        try { t1 = await readFile(call.path1); } catch (e) { throw stepErr(`读取 "${call.path1}"`, e); }
-        try { t2 = await readFile(call.path2); } catch (e) { throw stepErr(`读取 "${call.path2}"`, e); }
-        const l1 = t1.split('\n'), l2 = t2.split('\n');
-        let out = `--- ${call.path1}\n+++ ${call.path2}\n`;
-        let diffs = 0;
-        const max = Math.max(l1.length, l2.length);
-        for (let i = 0; i < max; i++) {
-            if (l1[i] !== l2[i]) {
-                if (l1[i] !== undefined) out += `- ${l1[i]}\n`;
-                if (l2[i] !== undefined) out += `+ ${l2[i]}\n`;
-                diffs++;
-                if (diffs > 100) { out += '... (差异过多，已截断)'; break; }
-            }
-        }
-        return diffs === 0 ? '两文件内容完全一致' : out;
+        const r = await fsCall('diff', { path1: call.path1, path2: call.path2 });
+        if (!r.ok) throw new ToolError('对比文件', r.error, '');
+        return r.result;
     }
 
     async function toolHash(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        try {
-            const buf = await readFileBinary(call.path);
-            const hashBuf = await crypto.subtle.digest('SHA-256', buf);
-            const hex = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
-            return `SHA-256: ${hex}\n大小: ${buf.byteLength} 字节`;
-        } catch (e) { throw stepErr('计算哈希', e); }
+        const r = await fsCall('hash', { path: call.path });
+        if (!r.ok) throw new ToolError('计算哈希', r.error, '');
+        return r.result;
     }
 
     async function toolWaitFile(call) {
@@ -1424,7 +1036,8 @@ ${getPluginsPrompt()}
         const timeout = call.timeout ? parseInt(call.timeout, 10) : 30000;
         const start = Date.now();
         while (Date.now() - start < timeout) {
-            if (await pathInfo(call.path).catch(() => null)) return `文件已出现: ${call.path}`;
+            const r = await fsCall('stat', { path: call.path });
+            if (r.ok) return `文件已出现: ${call.path}`;
             await sleep(500);
         }
         throw new ToolError('等待超时', `文件 ${call.path} 在 ${timeout}ms 内未出现`, '');
@@ -1440,11 +1053,9 @@ ${getPluginsPrompt()}
 
     async function toolPreview(call, msgEl) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `文件不存在: ${call.path}`, `根目录: ${await workspaceSnapshot()}`);
-        if (info.type === 'dir') throw new ToolError('检查路径', `"${call.path}" 是目录`, '请用 listdir');
-        let c;
-        try { c = await readFile(call.path); } catch (e) { throw stepErr('读取文件', e); }
+        const rd = await fsCall('read', { path: call.path });
+        if (!rd.ok) throw new ToolError('检查路径', `文件不存在: ${call.path}`, rd.error);
+        const c = rd.result;
         let html = c;
         if (/\.(md|markdown)$/i.test(call.path)) {
             html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:system-ui;padding:16px;line-height:1.6;background:#fff;color:#222}pre{white-space:pre-wrap;word-wrap:break-word}</style></head><body><pre>${esc(c)}</pre></body></html>`;
@@ -1469,14 +1080,9 @@ ${getPluginsPrompt()}
 
     async function toolImage(call, msgEl) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `文件不存在: ${call.path}`, `根目录: ${await workspaceSnapshot()}`);
-        if (info.type === 'dir') throw new ToolError('检查路径', `"${call.path}" 是目录`, '');
-        let file;
-        try { file = await (await getFileHandle(call.path)).getFile(); }
-        catch (e) { throw stepErr('读取文件', e); }
-        if (file.size > 5 * 1024 * 1024) throw new ToolError('检查大小', `图片 ${(file.size/1024/1024).toFixed(1)}MB 超过 5MB`, '请先压缩或用 exec 处理');
-        const dataUrl = await new Promise(res => { const r = new FileReader(); r.onload = e => res(e.target.result); r.readAsDataURL(file); });
+        const r = await fsCall('readb64', { path: call.path });
+        if (!r.ok) throw new ToolError('检查路径', `文件不存在: ${call.path}`, r.error);
+        const dataUrl = r.result;
         const img = document.createElement('img');
         img.src = dataUrl;
         img.style.cssText = 'max-width:100%;border-radius:8px;margin-top:8px;';
@@ -1533,19 +1139,17 @@ ${getPluginsPrompt()}
     async function toolChmod(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
         if (!call.mode) throw new ToolError('参数校验', '缺少 mode', '类 Unix：755/644/+x；Windows：+R/-R');
-        const info = await pathInfo(call.path).catch(e => { throw stepErr('检查路径', e); });
-        if (!info) throw new ToolError('检查路径', `路径不存在: ${call.path}`, '');
+        const st = await fsCall('stat', { path: call.path });
+        if (!st.ok) throw new ToolError('检查路径', `路径不存在: ${call.path}`, st.error);
 
-        const normPath = parsePath(call.path).join('/');
-        const fullPath = absPath ? absPath.replace(/\\/g, '/').replace(/\/$/, '') + '/' + normPath : normPath;
-        const winPath = fullPath.replace(/\//g, '\\');
+        const winPath = String(call.path).replace(/\//g, '\\');
 
         const isAttribStyle = /^[+-][RASH]$/i.test(String(call.mode).trim());
-        const primaryCmd   = isAttribStyle ? `attrib ${call.mode.toUpperCase()} "${winPath}"` : `chmod ${call.mode} "${fullPath}"`;
-        const fallbackCmd  = isAttribStyle ? `chmod ${call.mode} "${fullPath}"`               : `attrib +R "${winPath}"`;
+        const primaryCmd   = isAttribStyle ? `attrib ${call.mode.toUpperCase()} "${winPath}"` : `chmod ${call.mode} "${call.path}"`;
+        const fallbackCmd  = isAttribStyle ? `chmod ${call.mode} "${call.path}"`               : `attrib +R "${winPath}"`;
 
         const run = async (cmd) => {
-            const resp = await agentFetch('/exec', { command: cmd, cwd: absPath, timeout: 10000 }, 15000);
+            const resp = await agentFetch('/exec', { command: cmd, timeout: 10000 }, 15000);
             const data = await resp.json();
             return data;
         };
@@ -1899,7 +1503,7 @@ ${getPluginsPrompt()}
     }
 
     async function checkAndProcess() {
-        if (!isModeOn || !dirHandle) return;
+        if (!isModeOn) return;
         if (isCoolingDown) return;
         if (isProcessing) {
             // 弹窗等待用户期间不强制复位（用户可能还没点确定）
@@ -2075,9 +1679,6 @@ ${getPluginsPrompt()}
 
         connectBtn.addEventListener('click', async () => {
             if (step === 0) {
-                try {
-                    tempDirHandle = await W.showDirectoryPicker({ mode: 'readwrite' });
-                } catch { return; }
                 step = 1;
                 absContainer.style.display = 'flex';
                 workspacePathEl.textContent = '（点击"下一步"后自动获取）';
@@ -2090,7 +1691,7 @@ ${getPluginsPrompt()}
                 agentToken = tokenInput.value.trim();
                 if (agentToken) localStorage.setItem(TOKEN_KEY, agentToken);
                 else localStorage.removeItem(TOKEN_KEY);
-                dsSetStatus('working', '获取工作区...');
+                dsSetStatus('working', '连接本地服务...');
                 try {
                     const resp = await agentFetch('/workspace', {}, 8000);
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -2098,8 +1699,8 @@ ${getPluginsPrompt()}
                     if (!data.cwd) throw new Error('后端返回为空');
                     absPath = data.cwd;
                 } catch (e) {
-                    alert('无法获取后端工作区：' + e.message + '\n请确认 server.js 正在运行、Token 正确。');
-                    dsSetStatus('none', '获取失败');
+                    alert('无法连接本地服务：' + e.message + '\n请确认 server.js 正在运行、Token 正确。');
+                    dsSetStatus('none', '连接失败');
                     return;
                 }
                 workspacePathEl.textContent = absPath;
@@ -2119,13 +1720,12 @@ ${getPluginsPrompt()}
                 const startModeEl = document.querySelector('input[name="ds-start-mode"]:checked');
                 const startMode = startModeEl ? startModeEl.value : 'new';
 
-                dirHandle = tempDirHandle;
                 step = 3; isModeOn = true;
                 setupContainer.style.display = 'none';
                 mainContainer.style.display = 'flex';
-                dsSetStatus('active', `已连接: ${dirHandle.name}`);
+                dsSetStatus('active', '已连接');
                 await fetchServerPlugins();
-                log(`授权成功: ${dirHandle.name}`);
+                log(`已连接，工作区: ${absPath}`);
                 msgStore.clear();
         toolcallStatusMap.clear();
                 currentChatUrl = location.href;
@@ -2165,7 +1765,7 @@ ${getPluginsPrompt()}
         });
 
         disconnectBtn.addEventListener('click', () => {
-            step = 0; isModeOn = false; dirHandle = null; tempDirHandle = null;
+            step = 0; isModeOn = false;
             isProcessing = false; isCooldown = false; isCompressing = false; autoMode = false;
             processingStart = 0;
             if (cooldownTimer) { clearTimeout(cooldownTimer); cooldownTimer = null; }
