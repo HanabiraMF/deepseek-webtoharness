@@ -1658,8 +1658,10 @@ ${getPluginsPrompt()}
             processingStart = Date.now();
             const sec = Math.round(BATCH_COOLDOWN_MS / 1000);
             log(`⚠ 已连续执行 ${toolcallCounter} 个工具，暂停 ${sec}s 冷却后再继续（防频率限制）`);
-            dsSetStatus('working', `防封控冷却中 ${sec}s`);
-            await sleep(BATCH_COOLDOWN_MS);
+            for (let i = sec; i > 0; i--) {
+                dsSetStatus('working', `防封控冷却中 ${i}s`);
+                await sleep(1000);
+            }
             toolcallCounter = 0;
             isCoolingDown = false;
             isProcessing = false;
