@@ -227,10 +227,32 @@
     function getInitPrompt(absPath, taskGoal) {
         return `【系统指令：本地工作区智能体】
 
-你是本地代码智能体，运行在用户的真实电脑上。工作流程：思考 → 调用工具 → 等待结果 → 下一步。
+你是本地代码智能体，运行在用户的真实电脑上。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【最高优先级：工具调用格式】
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+你的每一次工具调用，必须完整地包裹在 \`\`\`toolcall 代码块里。
+这是硬性要求，违反会导致调用被系统拒绝。
+
+✅ 正确写法：
+\`\`\`toolcall
+<toolcall>
+  <op>listdir</op>
+  <path>.</path>
+</toolcall>
+\`\`\`
+
+❌ 错误写法（裸 XML，会被直接拒绝）：
+<toolcall>
+  <op>listdir</op>
+</toolcall>
+
+记住：只要你要调用工具，回复里就必须出现 \`\`\`toolcall 这个标记。没有它 = 失败。
 
 【核心规则】
-1. 【第一铁律】每一次工具调用，必须把完整的 <toolcall> 包裹在 \`\`\`toolcall 代码块中。绝对禁止输出裸 XML。不包代码块 = 调用失败。
+1. 【第一铁律】同上：必须用 \`\`\`toolcall 包裹完整的 <toolcall>。绝对禁止裸 XML。
 2. 【绝对真实】任何目录结构、文件内容、命令结果必须通过工具获取，严禁编造或凭记忆作答。看不到就调工具看。
 3. 【先读后写】修改文件前，必须先 openfile 读取当前内容，再 edit。禁止盲目覆盖。
 4. 【自动备份】writefile / edit / editline / append / replaceall 执行前，系统会自动生成 .bak 备份，可放心操作。
@@ -534,9 +556,10 @@ ${getPluginsPrompt()}
         pres.forEach(pre => {
             const text = pre.textContent || '';
             if (!text.includes('<toolcall>')) return;
+            // 只折叠真正的代码块（有 md-code-block 父级），裸 XML 留给 parseToolcalls 拦截
+            if (!pre.closest('.md-code-block')) return;
             const sig = String(text.length) + '_' + hashStr(text);
             if (pre.getAttribute('data-ds-folded') === sig) return;
-
             const matches = matchToolcalls(text);
             if (!matches.length) return;
 
@@ -782,9 +805,12 @@ ${getPluginsPrompt()}
         clone.querySelectorAll('pre').forEach(pre => {
             const rawText = pre.textContent;
             if (!rawText.includes('<toolcall>')) return;
-            
+
+            // 已被 foldToolcalls 处理过的 pre（带 data-ds-folded）说明原本就是合法代码块，
+            // 直接当合法处理，避免误判为裸 XML
+            const alreadyFolded = pre.hasAttribute('data-ds-folded');
             // 检查是不是真正的 Markdown 代码块
-            const isCodeBlock = !!pre.closest('.md-code-block');
+            const isCodeBlock = alreadyFolded || !!pre.closest('.md-code-block');
             if (isCodeBlock) {
                 rawTexts.push(rawText);
             } else {
@@ -1984,7 +2010,6 @@ ${getPluginsPrompt()}
             isProcessing = false; isCooldown = false; isCompressing = false; autoMode = false;
             processingStart = 0;
             if (cooldownTimer) { clearTimeout(cooldownTimer); cooldownTimer = null; }
-            executedSigs.clear();
             msgStore.clear();
         toolcallStatusMap.clear();
             pendingResults = null;
