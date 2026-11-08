@@ -80,11 +80,13 @@ if ($f.ShowDialog() -eq 'OK') {
 }
 `;
             const tmpFile = path.join(os.tmpdir(), 'ds_pick_folder_' + Date.now() + '.ps1');
-            try { fs.writeFileSync(tmpFile, psScript, 'utf8'); tmpFilesToClean.add(tmpFile); }
+            // 关键：必须加 UTF-8 BOM，否则 PowerShell 5.1 按 GBK 读取会让中文全部乱码 → 脚本语法错误 → 弹窗根本不出现
+            try { fs.writeFileSync(tmpFile, '\uFEFF' + psScript, 'utf8'); tmpFilesToClean.add(tmpFile); }
             catch (e) { return resolve({ ok: false, error: e.message }); }
             
-            execFile('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', tmpFile],
-                { timeout: 300000, windowsHide: true },
+            // 注意：windowsHide 会连同 WinForms 弹窗一起隐藏，必须用 -WindowStyle Hidden 只藏控制台
+            execFile('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-STA', '-ExecutionPolicy', 'Bypass', '-File', tmpFile],
+                { timeout: 120000, windowsHide: false },
                 (err, stdout) => {
                     try { fs.unlinkSync(tmpFile); tmpFilesToClean.delete(tmpFile); } catch {}
                     if (err) return resolve({ ok: false, error: err.message });

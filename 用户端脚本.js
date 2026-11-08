@@ -1751,17 +1751,18 @@ ${getPluginsPrompt()}
         throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; });
 
         async function doPickWorkspace() {
-            dsSetStatus('working', '等待选择目录...');
+            dsSetStatus('working', '请在弹出的窗口中选择');
             pickBtn.disabled = true;
             const oldTxt = pickBtn.textContent;
-            pickBtn.textContent = '等待中...';
+            pickBtn.textContent = '等待弹窗...';
             try {
-                const resp = await agentFetch('/workspace/pick', {}, 300000);
+                // 130s，略大于后端 PowerShell 的 120s 超时，确保后端先放弃
+                const resp = await agentFetch('/workspace/pick', {}, 130000);
                 if (!resp.ok) throw new Error('HTTP ' + resp.status);
                 const data = await resp.json();
                 if (!data.ok) {
                     dsSetStatus('working', '未选择目录');
-                    log(`选择目录失败: ${data.error || '已取消'}`);
+                    log(`选择目录: ${data.error || '已取消'}`);
                     return false;
                 }
                 absPath = data.cwd;
@@ -1771,8 +1772,14 @@ ${getPluginsPrompt()}
                 log(`工作区: ${absPath}`);
                 return true;
             } catch (e) {
-                log('选择目录失败: ' + e.message);
-                dsSetStatus('none', '选择失败');
+                const msg = e.message || '';
+                if (msg.includes('超时') || msg.includes('timeout') || msg.includes('AbortError')) {
+                    dsSetStatus('none', '选择超时');
+                    log('选择超时：弹窗可能被系统隐藏或未响应');
+                } else {
+                    dsSetStatus('none', '选择失败');
+                    log('选择目录失败: ' + msg);
+                }
                 return false;
             } finally {
                 pickBtn.disabled = false;
