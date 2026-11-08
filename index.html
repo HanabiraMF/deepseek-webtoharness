@@ -6,282 +6,409 @@
     <title>DeepSeek WebtoHarness - 本地智能体桥接</title>
     <style>
         :root {
-            --bg: #0f1115;
-            --bg-card: #1a1d24;
-            --text-main: #e2e8f0;
-            --text-muted: #94a3b8;
-            --primary: #4CAF50;
-            --primary-hover: #43a047;
-            --border: #2d3748;
-            --danger: #ef4444;
+            --bg-base: #09090b;
+            --bg-card: rgba(24, 24, 27, 0.6);
+            --bg-card-hover: rgba(39, 39, 42, 0.8);
+            --text-main: #f4f4f5;
+            --text-muted: #a1a1aa;
+            --primary: #10b981;
+            --primary-hover: #059669;
+            --primary-glow: rgba(16, 185, 129, 0.15);
+            --border: rgba(255, 255, 255, 0.1);
+            --border-hover: rgba(255, 255, 255, 0.2);
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background-color: var(--bg);
+            font-family: var(--font-sans);
+            background-color: var(--bg-base);
             color: var(--text-main);
             line-height: 1.6;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
         }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 40px 20px;
+
+        /* 背景特效 */
+        .bg-grid {
+            position: fixed;
+            inset: 0;
+            background-image: linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                              linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            z-index: -2;
+            mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
+            -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 80%);
         }
-        header {
-            text-align: center;
-            margin-bottom: 60px;
+        .glow {
+            position: fixed;
+            top: -20%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 600px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 60%);
+            filter: blur(80px);
+            z-index: -1;
+            pointer-events: none;
         }
+
+        .container { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+
+        /* Header */
+        header { padding: 100px 0 80px; text-align: center; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 100px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+            backdrop-filter: blur(10px);
+        }
+        .badge svg { width: 14px; height: 14px; color: var(--primary); }
         h1 {
-            font-size: 2.8rem;
+            font-size: 4rem;
             font-weight: 800;
-            margin-bottom: 16px;
-            background: linear-gradient(90deg, #4CAF50, #2dd4bf);
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            margin-bottom: 20px;
+            background: linear-gradient(180deg, #fff 0%, #a1a1aa 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
-        p.subtitle {
-            font-size: 1.2rem;
-            color: var(--text-muted);
-        }
+        .subtitle { font-size: 1.25rem; color: var(--text-muted); max-width: 600px; margin: 0 auto 40px; }
         
-        .section-title {
-            font-size: 1.5rem;
-            margin: 40px 0 20px;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 10px;
-        }
-
-        /* 特性卡片 */
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-        }
-        .feature-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 24px;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .feature-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-            border-color: #3b4252;
-        }
-        .feature-card h3 {
-            font-size: 1.1rem;
-            margin-bottom: 10px;
-            color: #f8fafc;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .feature-card p {
-            font-size: 0.95rem;
-            color: var(--text-muted);
-        }
-
-        /* 下载区 */
-        .download-section {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 16px;
-            padding: 40px;
-            text-align: center;
-            margin-top: 40px;
-        }
-        .download-group {
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            flex-wrap: wrap;
-            margin-top: 24px;
-        }
         .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 14px 28px;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            text-decoration: none;
-            transition: all 0.2s;
-            cursor: pointer;
-            border: none;
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            padding: 12px 24px; border-radius: 8px; font-size: 1rem; font-weight: 500;
+            text-decoration: none; transition: all 0.2s; cursor: pointer; border: 1px solid transparent; font-family: inherit;
         }
-        .btn-primary {
-            background-color: var(--primary);
-            color: #fff;
-            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+        .btn-primary { background: var(--text-main); color: var(--bg-base); }
+        .btn-primary:hover { background: #d4d4d8; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(255,255,255,0.1); }
+        .btn-outline { background: transparent; color: var(--text-main); border-color: var(--border); }
+        .btn-outline:hover { border-color: var(--border-hover); background: var(--bg-card); transform: translateY(-1px); }
+        .btn svg { width: 18px; height: 18px; }
+
+        /* Sections */
+        .section-header { text-align: center; margin: 80px 0 40px; }
+        .section-title { font-size: 2rem; font-weight: 700; margin-bottom: 12px; letter-spacing: -0.01em; }
+        .section-desc { color: var(--text-muted); font-size: 1.1rem; }
+
+        /* Features Grid */
+        .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .feature-card {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 32px;
+            transition: all 0.3s; position: relative; overflow: hidden; backdrop-filter: blur(10px);
         }
-        .btn-primary:hover {
-            background-color: var(--primary-hover);
-            transform: translateY(-2px);
+        .feature-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); transform: translateY(-2px); }
+        .feature-icon-wrapper {
+            width: 48px; height: 48px; border-radius: 12px; background: rgba(255,255,255,0.05);
+            display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid var(--border);
         }
-        .btn-outline {
-            background-color: transparent;
-            color: var(--text-main);
-            border: 1px solid var(--border);
+        .feature-icon-wrapper svg { width: 24px; height: 24px; color: var(--primary); }
+        .feature-card h3 { font-size: 1.15rem; font-weight: 600; margin-bottom: 10px; color: var(--text-main); }
+        .feature-card p { font-size: 0.95rem; color: var(--text-muted); line-height: 1.5; }
+
+        /* Highlight Features (Black Tech) */
+        .black-tech { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 80px; }
+        @media (max-width: 768px) { .black-tech { grid-template-columns: 1fr; } }
+        .tech-card {
+            background: linear-gradient(145deg, var(--bg-card) 0%, rgba(9,9,11,0.8) 100%);
+            border: 1px solid var(--border); border-radius: 20px; padding: 40px;
+            position: relative; overflow: hidden;
         }
-        .btn-outline:hover {
-            background-color: var(--border);
-            transform: translateY(-2px);
+        .tech-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(16, 185, 129, 0.3), transparent);
+        }
+        .tech-card h3 { font-size: 1.4rem; font-weight: 700; display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+        .tech-card h3 svg { width: 24px; height: 24px; color: var(--primary); }
+        .tech-card p { color: var(--text-muted); font-size: 1rem; margin-bottom: 24px; }
+        
+        /* Code Block */
+        .code-window {
+            background: #000; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+            font-family: var(--font-mono); font-size: 0.85rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .code-header {
+            background: rgba(255,255,255,0.03); padding: 10px 16px; border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-family: var(--font-sans); font-size: 0.8rem;
+        }
+        .dot { width: 10px; height: 10px; border-radius: 50%; }
+        .dot-r { background: #ff5f56; } .dot-y { background: #ffbd2e; } .dot-g { background: #27c93f; }
+        .code-content { padding: 16px; color: #a1a1aa; overflow-x: auto; line-height: 1.6; }
+        .code-content .keyword { color: #c678dd; }
+        .code-content .string { color: #98c379; }
+        .code-content .func { color: #61afef; }
+        .code-content .comment { color: #5c6370; font-style: italic; }
+
+        /* Steps */
+        .steps-container { display: flex; flex-direction: column; gap: 24px; max-width: 760px; margin: 0 auto 80px; }
+        .step-item { display: flex; gap: 20px; }
+        .step-num {
+            flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--bg-card);
+            border: 1px solid var(--border); display: flex; align-items: center; justify-content: center;
+            font-weight: 600; color: var(--text-main); font-size: 0.9rem;
+        }
+        .step-content h4 { font-size: 1.1rem; font-weight: 600; margin-bottom: 6px; }
+        .step-content p { color: var(--text-muted); font-size: 0.95rem; }
+        .step-content code {
+            background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px;
+            font-family: var(--font-mono); font-size: 0.85rem; color: var(--primary);
         }
 
-        /* 步骤指引 */
-        .steps {
-            list-style: none;
-            margin-top: 20px;
+        /* Download Section */
+        .download-box {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 24px;
+            padding: 60px 40px; text-align: center; margin-bottom: 80px; backdrop-filter: blur(10px);
+            position: relative; overflow: hidden;
         }
-        .steps li {
-            position: relative;
-            padding-left: 30px;
-            margin-bottom: 16px;
-            color: var(--text-muted);
+        .download-box::after {
+            content: ''; position: absolute; inset: 0; border-radius: 24px; padding: 2px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent 50%, rgba(16,185,129,0.1));
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
         }
-        .steps li::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 8px;
-            width: 16px;
-            height: 16px;
-            background-color: var(--primary);
-            border-radius: 50%;
-            opacity: 0.8;
-        }
-        .steps code {
-            background: #0b0e14;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: ui-monospace, monospace;
-            font-size: 0.9em;
-            color: #4ade80;
-        }
+        .download-box h2 { font-size: 2rem; font-weight: 700; margin-bottom: 12px; }
+        .download-box p { color: var(--text-muted); margin-bottom: 32px; }
+        .download-actions { display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; }
 
-        footer {
-            text-align: center;
-            margin-top: 80px;
-            padding-top: 20px;
-            border-top: 1px solid var(--border);
-            color: var(--text-muted);
-            font-size: 0.9rem;
+        /* AI Prompt Section */
+        .ai-prompt-box {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 32px; margin-bottom: 80px;
         }
-        footer a {
-            color: var(--primary);
-            text-decoration: none;
+        .textarea-wrapper { position: relative; margin-top: 16px; }
+        textarea {
+            width: 100%; height: 200px; background: #000; border: 1px solid var(--border); border-radius: 12px;
+            color: #e4e4e7; padding: 20px; font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.6;
+            resize: vertical; outline: none; transition: border-color 0.2s;
         }
+        textarea:focus { border-color: var(--primary); }
+        .copy-btn { position: absolute; bottom: 16px; right: 16px; padding: 8px 16px; font-size: 0.85rem; }
+
+        /* Footer */
+        footer { border-top: 1px solid var(--border); padding: 40px 0; text-align: center; color: var(--text-muted); font-size: 0.9rem; }
+        footer a { color: var(--text-main); text-decoration: none; border-bottom: 1px dotted var(--text-muted); transition: color 0.2s; }
+        footer a:hover { color: var(--primary); border-color: var(--primary); }
+        
+        /* Animations */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate { animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; }
+        .delay-1 { animation-delay: 0.1s; }
+        .delay-2 { animation-delay: 0.2s; }
+        .delay-3 { animation-delay: 0.3s; }
     </style>
 </head>
 <body>
+    <div class="bg-grid"></div>
+    <div class="glow"></div>
+
     <div class="container">
-        <header>
+        <header class="animate">
+            <div class="badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                v2.0 现已支持 AI 自举拓展
+            </div>
             <h1>DeepSeek WebtoHarness</h1>
-            <p class="subtitle">赋予网页端 AI 真实的本地文件系统与 Shell 操作能力</p>
+            <p class="subtitle">赋予网页端 AI 真实的本地文件系统与 Shell 操作能力。零 API 成本，无限拓展，打造属于你的专属智能体。</p>
+            <div class="download-actions" style="justify-content: center;">
+                <a href="./server.js" download="server.js" class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    下载核心文件
+                </a>
+                <a href="https://github.com/HanabiraMF/deepseek-webtoharness" target="_blank" class="btn btn-outline">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+                    GitHub 仓库
+                </a>
+            </div>
         </header>
 
-        <div class="section-title">✨ 核心特性</div>
-        <div class="features">
+        <div class="section-header animate delay-1">
+            <h2 class="section-title">重新定义网页 AI</h2>
+            <p class="section-desc">打破浏览器沙箱，连接本地环境，让 AI 真正为你打工。</p>
+        </div>
+
+        <div class="features-grid animate delay-1">
             <div class="feature-card">
-                <h3>📂 本地文件直连</h3>
-                <p>基于 File System Access API，AI 能够直接读取、写入、修改和删除你授权的本地目录，告别复制粘贴。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </div>
+                <h3>文件系统直连</h3>
+                <p>基于 File System Access API，AI 可直接读取、写入、覆盖和删除你授权的本地目录，告别复制粘贴的原始时代。</p>
             </div>
             <div class="feature-card">
-                <h3>💻 命令自动执行</h3>
-                <p>通过轻量级本地 Node.js 服务，AI 可以执行 CMD/PowerShell 命令，跑测试、编译代码一气呵成。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                </div>
+                <h3>Shell 命令执行</h3>
+                <p>通过本地 Node.js 桥接服务，AI 可静默执行 CMD/PowerShell 命令。跑测试、编译代码、管理系统一气呵成。</p>
             </div>
             <div class="feature-card">
-                <h3>🛡️ 防封控与自动重试</h3>
-                <p>内置高频请求拦截（冷却机制）与网络异常自动重试（10s 间隔），保障长时间连续调用不被封禁。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+                <h3>防封控与自动重试</h3>
+                <p>内置高频请求冷却机制与网络异常自动重试，保障长时间连续调用不触发网页端风控，稳如老狗。</p>
             </div>
             <div class="feature-card">
-                <h3>🎨 沉浸式 UI 折叠</h3>
-                <p>冗长的 Toolcall 代码块与工具返回结果自动折叠，且左侧配有实时状态图标（运行中/成功/失败）。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </div>
+                <h3>折叠与实时状态</h3>
+                <p>冗长的 Toolcall 与返回结果自动折叠，左侧配有实时状态图标（黄圈运行中 / 绿勾成功 / 红叉失败），清爽直观。</p>
             </div>
             <div class="feature-card">
-                <h3>⚡ 批量并发优化</h3>
-                <p>支持处理超时保护与写后缓冲，避免文件句柄冲突，彻底解决批次调用时的静默丢包问题。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </div>
+                <h3>批量并发优化</h3>
+                <p>支持处理超时保护、写后缓冲防死锁，彻底解决批次调用时的静默丢包问题，最多支持单批 10+ 工具协同。</p>
             </div>
             <div class="feature-card">
-                <h3>🔒 安全可控</h3>
-                <p>引入确认弹窗机制。对于危险命令或文件覆盖，用户点击确认后才会执行，且支持一键切换“完全权限”。</p>
+                <div class="feature-icon-wrapper">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                </div>
+                <h3>安全权限掌控</h3>
+                <p>引入确认弹窗机制。对于危险命令或文件覆盖，用户点击确认后才会执行，也可一键开启“完全权限”进入极速模式。</p>
             </div>
         </div>
 
-        <div class="section-title">🚀 快速开始</div>
-        <ul class="steps">
-            <li><strong>准备环境：</strong>确保电脑安装了 <a href="https://nodejs.org/" target="_blank" style="color:var(--primary)">Node.js</a> 与浏览器插件 <a href="https://www.tampermonkey.net/" target="_blank" style="color:var(--primary)">Tampermonkey</a>。</li>
-            <li><strong>启动本地服务：</strong>下载下方的 <code>server.js</code>，在该文件所在目录打开终端，运行 <code>node server.js</code>。</li>
-            <li><strong>安装脚本：</strong>下载下方的 <code>用户端脚本.js</code>，新建油猴脚本并粘贴内容，保存。</li>
-            <li><strong>连接与授权：</strong>刷新 DeepSeek 网页，在左侧面板点击“开启模式”，依次选择工作区目录、输入绝对路径和任务目标。</li>
-        </ul>
+        <div class="section-header animate delay-2">
+            <h2 class="section-title">黑科技：让 AI 自己长出手脚</h2>
+            <p class="section-desc">突破现有工具的局限，实现真正的赛博自举。</p>
+        </div>
 
-        <div class="section-title">🔌 社区拓展：注入你的自定义工具</div>
-        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 40px;">
-            <p style="color: var(--text-muted); margin-bottom: 16px;">
-                觉得内置工具不够用？你可以通过注入一段简单的 <code>JavaScript</code>（例如放在油猴脚本的最末尾），注册属于你自己的工具，AI 将自动学会使用它！
-            </p>
-            <pre style="background: #0b0e14; padding: 16px; border-radius: 8px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 0.9rem; color: #a5b4fc; line-height: 1.5; border: 1px solid #1f2937;">
-<span style="color: #6b7280;">// 在脚本末尾或控制台注入即可生效</span>
-window.DS_Agent_Plugins.push({
-  name: <span style="color: #4ade80;">"say_hello"</span>, <span style="color: #6b7280;">// 工具名称 (AI 调用时的 op)</span>
-  description: <span style="color: #4ade80;">"向某人打招呼。参数：name"</span>, <span style="color: #6b7280;">// 告诉 AI 怎么用</span>
-  execute: async (args) => {
-    <span style="color: #6b7280;">// args 包含所有提取出的参数（如 args.extraArgs.name）</span>
-    const target = args.extraArgs?.name || <span style="color: #4ade80;">"世界"</span>;
-    return `你好，${target}！很高兴认识你。`;
+        <div class="black-tech animate delay-2">
+            <div class="tech-card">
+                <h3>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                    AI 自举：无中生有写插件
+                </h3>
+                <p>没有工具能完成任务？AI 可以直接编写一段 JavaScript，并通过 <code>register_plugin</code> 当场挂载。下一轮对话直接使用，无需刷新页面，无需修改源码。</p>
+                <div class="code-window">
+                    <div class="code-header">
+                        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+                        <span style="margin-left: 8px;">register_plugin.js</span>
+                    </div>
+                    <div class="code-content">
+<span class="comment">// AI 自己生成的插件代码</span>
+{
+  <span class="keyword">name</span>: <span class="string">'get_weather'</span>,
+  <span class="keyword">description</span>: <span class="string">'获取指定城市的天气'</span>,
+  <span class="keyword">execute</span>: <span class="keyword">async</span> (args) => {
+    <span class="keyword">const</span> res = <span class="keyword">await</span> <span class="func">fetch</span>(<span class="string">`https://api...`</span>);
+    <span class="keyword">return</span> <span class="keyword">await</span> res.<span class="func">text</span>();
   }
-});</pre>
-            <p style="color: #6b7280; font-size: 0.85rem; margin-top: 12px;">
-                * 无需修改主脚本代码，AI 的提示词字典会自动追加该工具的 <code>description</code>，并在执行时自动路由到你的 <code>execute</code> 函数。
-            </p>
+}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="tech-card">
+                <h3>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    对话提取：打破上下文限制
+                </h3>
+                <p>当对话太长或发生错误遗忘时，AI 可通过 <code>get_chat_history</code> 插件，直接从网页 DOM 中逆序提取纯净版的聊天记录，瞬间找回记忆。</p>
+                <div class="code-window">
+                    <div class="code-header">
+                        <div class="dot dot-r"></div><div class="dot dot-y"></div><div class="dot dot-g"></div>
+                        <span style="margin-left: 8px;">get_chat_history.js</span>
+                    </div>
+                    <div class="code-content">
+<span class="comment">// 排除折叠 UI 与思考过程，只取核心文本</span>
+<span class="keyword">const</span> clone = item.<span class="func">cloneNode</span>(<span class="keyword">true</span>);
+clone.<span class="func">querySelectorAll</span>(<span class="string">'.ds-fold-list, .ds-think-content'</span>)
+     .<span class="func">forEach</span>(el => el.<span class="func">remove</span>());
+<span class="keyword">const</span> text = clone.<span class="func">innerText</span>.<span class="func">trim</span>();
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="section-title">🤖 开发者专属：让 AI 帮你写插件</div>
-        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 40px;">
-            <p style="color: var(--text-muted); margin-bottom: 16px;">
-                这是给 AI 看的接口文档。你可以把下面的内容直接发给 ChatGPT / Claude / DeepSeek，让它们为你生成符合规范的插件代码，然后直接粘贴进油猴脚本中。
-            </p>
-            <textarea readonly id="ai-prompt" style="width: 100%; height: 180px; background: #0b0e14; color: #a5b4fc; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 0.85rem; resize: vertical; line-height: 1.5;">
-你是一个 AI 智能体的插件开发者。我正在使用一个名为 "DeepSeek WebtoHarness" 的工具，它支持通过 JS 注入自定义插件。
+        <div class="section-header animate delay-3">
+            <h2 class="section-title">快速开始</h2>
+        </div>
+
+        <div class="steps-container animate delay-3">
+            <div class="step-item">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                    <h4>准备环境</h4>
+                    <p>确保电脑已安装 <a href="https://nodejs.org/" target="_blank" style="color:var(--primary); text-decoration:none;">Node.js</a> 与浏览器插件 <a href="https://www.tampermonkey.net/" target="_blank" style="color:var(--primary); text-decoration:none;">Tampermonkey</a>。</p>
+                </div>
+            </div>
+            <div class="step-item">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                    <h4>启动本地服务</h4>
+                    <p>下载下方的 <code>server.js</code>，在该文件所在目录打开终端，运行 <code>node server.js</code> 保持窗口开启。</p>
+                </div>
+            </div>
+            <div class="step-item">
+                <div class="step-num">3</div>
+                <div class="step-content">
+                    <h4>安装油猴脚本</h4>
+                    <p>下载 <code>用户端脚本.js</code>，在 Tampermonkey 中新建脚本，粘贴全部代码并保存。</p>
+                </div>
+            </div>
+            <div class="step-item">
+                <div class="step-num">4</div>
+                <div class="step-content">
+                    <h4>连接与起飞</h4>
+                    <p>刷新 DeepSeek 网页，在左侧面板点击“开启模式”，授权工作区目录并输入绝对路径即可开始对话。</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="ai-prompt-box animate delay-3">
+            <h3 style="font-size: 1.2rem; font-weight: 600; display: flex; align-items: center; gap: 8px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:20px;height:20px;color:var(--primary);"><path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5"/><path d="M8.5 8.5v.01"/><path d="M16 12v.01"/><path d="M12 16v.01"/></svg>
+                开发者专属：让 AI 帮你写插件
+            </h3>
+            <p style="color: var(--text-muted); margin-top: 8px;">把下方提示词发给大模型，让它为你生成符合规范的插件代码，然后粘贴进油猴脚本即可永久生效。</p>
+            <div class="textarea-wrapper">
+                <textarea readonly id="ai-prompt">你是一个 AI 智能体的插件开发者。我正在使用一个名为 "DeepSeek WebtoHarness" 的工具，它支持通过 JS 注入自定义插件。
 
 插件必须是一个包含 execute 函数的 JS 对象，格式如下：
 window.DS_Agent_Plugins.push({
   name: "your_tool_name", // 英文小写+下划线
   description: "用一句话向 AI 解释这个工具的功能和参数",
   execute: async (args) => {
-    // args 包含内置工具的参数，自定义参数在 args.extraArgs 中
-    // 可以在这里调用 fetch、操作 DOM 或读取浏览器剪贴板
+    // args 包含内置参数，自定义参数在 args.extraArgs 中
+    // 可以调用 fetch、操作 DOM 等
     return "给 AI 看的执行结果文本";
   }
 });
 
-请帮我编写一个插件，功能是：[在这里输入你想要的功能，例如：获取当前页面的所有标题]
-            </textarea>
-            <button onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt').value); this.innerText='已复制!'; setTimeout(()=>this.innerText='一键复制给 AI', 2000);" class="btn btn-outline" style="margin-top: 12px; font-size: 0.9rem; padding: 8px 16px;">一键复制给 AI</button>
+请帮我编写一个插件，功能是：[在这里输入你想要的的功能]</textarea>
+                <button onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt').value); this.innerText='已复制'; setTimeout(()=>this.innerText='一键复制', 2000);" class="btn btn-primary copy-btn">一键复制</button>
+            </div>
         </div>
 
-        <div class="download-section">
-            <h2>获取文件</h2>
-            <p style="color: var(--text-muted); margin-top: 8px;">点击下方按钮直接下载最新的核心文件</p>
-            <div class="download-group">
-                <a href="./server.js" download="server.js" class="btn btn-primary">下载 server.js</a>
-                <a href="./用户端脚本.js" download="用户端脚本.js" class="btn btn-primary">下载 用户端脚本.js</a>
-            </div>
-            <div style="margin-top: 24px;">
-                <a href="https://github.com/HanabiraMF/deepseek-webtoharness" target="_blank" class="btn btn-outline">访问 GitHub 仓库</a>
+        <div class="download-box animate delay-3">
+            <h2>准备好探索了吗？</h2>
+            <p>点击下方按钮直接下载最新的核心文件，开启你的本地智能体之旅。</p>
+            <div class="download-actions">
+                <a href="./server.js" download="server.js" class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                    server.js
+                </a>
+                <a href="./用户端脚本.js" download="用户端脚本.js" class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    用户端脚本.js
+                </a>
             </div>
         </div>
 
         <footer>
-            <p>Made with ❤️ for DeepSeek Web &copy; 2026 <a href="https://github.com/HanabiraMF" target="_blank">HanabiraMF</a></p>
-            <p style="margin-top: 8px; font-size: 0.8rem; color: #4b5563;">免责声明：本地服务与脚本会访问您的文件系统，请确保仅在安全的网络和个人电脑上使用。</p>
+            <p>Made with <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;display:inline;color:#ef4444;vertical-align:middle;margin:0 2px;"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> for DeepSeek Web &copy; 2026 <a href="https://github.com/HanabiraMF" target="_blank">HanabiraMF</a></p>
+            <p style="margin-top: 12px; font-size: 0.8rem; color: #52525b;">免责声明：本地服务与脚本会访问您的文件系统，请确保仅在安全的个人电脑上使用。</p>
         </footer>
     </div>
 </body>
