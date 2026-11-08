@@ -885,7 +885,7 @@ ${getPluginsPrompt()}
             while ((mm = re.exec(om[1])) !== null) options.push(mm[1].trim());
         }
         // 提取所有自定义标签存入 extraArgs（排除已知的核心标签）
-        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js', 'cwd', 'ms']);
+        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js', 'cwd', 'ms', 'pid']);
         const extraArgs = {};
         const tagRegex = /<([a-zA-Z0-9_]+)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
         let match;
@@ -911,7 +911,7 @@ ${getPluginsPrompt()}
             method: (extractTag(tcStr, 'method') || 'GET').toUpperCase(),
             headers: extractTag(tcStr, 'headers'), text: extractTag(tcStr, 'text'), options,
             plugin_name: extractTag(tcStr, 'plugin_name'), plugin_js: extractTag(tcStr, 'plugin_js'),
-            cwd: extractTag(tcStr, 'cwd'), ms: extractTag(tcStr, 'ms'),
+            cwd: extractTag(tcStr, 'cwd'), ms: extractTag(tcStr, 'ms'), pid: extractTag(tcStr, 'pid'),
             extraArgs
         };
     }
@@ -1614,9 +1614,10 @@ ${getPluginsPrompt()}
     }
 
     async function toolKillProcess(call) {
-        if (!call.pid) throw new ToolError('参数校验', '缺少 pid', '请提供要终止的进程 PID');
+        const pid = call.pid || (call.extraArgs && call.extraArgs.pid);
+        if (!pid) throw new ToolError('参数校验', '缺少 pid', '请提供要终止的进程 PID');
         try {
-            const resp = await agentFetch('/exec/kill', { pid: call.pid }, 5000);
+            const resp = await agentFetch('/exec/kill', { pid }, 5000);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = await resp.json();
             return data.output;
