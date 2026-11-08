@@ -4,7 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const path = require('path');
 
-const PLUGINS_DIR = path.join(process.cwd(), 'plugins');
+const PLUGINS_DIR = path.join(__dirname, 'plugins');
 let serverPlugins = {}; // { name: { description, execute } }
 
 // 确保插件目录存在
