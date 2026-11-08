@@ -217,11 +217,11 @@
             <h1>DeepSeek WebtoHarness</h1>
             <p class="subtitle">赋予网页端 AI 真实的本地文件系统与 Shell 操作能力。零 API 成本，无限拓展，打造属于你的专属智能体。</p>
             <div class="download-actions" style="justify-content: center;">
-                <a href="./server.js" download="server.js" class="btn btn-primary">
+                <a href="https://raw.githubusercontent.com/HanabiraMF/deepseek-webtoharness/main/server.js" download="server.js" class="btn btn-primary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
                     下载 server.js
                 </a>
-                <a href="./用户端脚本.js" download="用户端脚本.js" class="btn btn-primary">
+                <a href="https://raw.githubusercontent.com/HanabiraMF/deepseek-webtoharness/main/%E7%94%A8%E6%88%B7%E7%AB%AF%E8%84%9A%E6%9C%AC.js" download="用户端脚本.js" class="btn btn-primary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                     下载 用户端脚本.js
                 </a>
@@ -381,20 +381,25 @@
             </h3>
             <p style="color: var(--text-muted); margin-top: 8px;">把下方提示词发给大模型，让它为你生成符合规范的插件代码，然后粘贴进油猴脚本即可永久生效。</p>
             <div class="textarea-wrapper">
-                <textarea readonly id="ai-prompt">你是一个 AI 智能体的插件开发者。我正在使用一个名为 "DeepSeek WebtoHarness" 的工具，它支持通过 JS 注入自定义插件。
+                <textarea readonly id="ai-prompt">你是一个 AI 智能体的插件开发者。我正在使用 "DeepSeek WebtoHarness" 工具，它支持通过 JS 注入自定义插件。
 
-插件必须是一个包含 execute 函数的 JS 对象，格式如下：
+请帮我编写一个插件，功能是：[在这里输入你想要的的功能]
+
+要求：
+1. 请把函数封装好，直接导出一个 JavaScript 对象。
+2. 对象必须包含 name（英文小写+下划线）、description（向 AI 说明用法）、execute（异步函数）。
+3. 自定义参数可以从 args.extraArgs 中获取。
+4. 你可以自由使用 fetch、DOM 操作或任何浏览器环境下的 API。
+
+格式示例：
 window.DS_Agent_Plugins.push({
-  name: "your_tool_name", // 英文小写+下划线
+  name: "your_tool_name",
   description: "用一句话向 AI 解释这个工具的功能和参数",
   execute: async (args) => {
-    // args 包含内置参数，自定义参数在 args.extraArgs 中
-    // 可以调用 fetch、操作 DOM 等
+    // 你的逻辑代码
     return "给 AI 看的执行结果文本";
   }
-});
-
-请帮我编写一个插件，功能是：[在这里输入你想要的的功能]</textarea>
+});</textarea>
                 <button onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt').value); this.innerText='已复制'; setTimeout(()=>this.innerText='一键复制', 2000);" class="btn btn-primary copy-btn">一键复制</button>
             </div>
         </div>
@@ -403,11 +408,11 @@ window.DS_Agent_Plugins.push({
             <h2>准备好探索了吗？</h2>
             <p>点击下方按钮直接下载最新的核心文件，开启你的本地智能体之旅。</p>
             <div class="download-actions">
-                <a href="./server.js" download="server.js" class="btn btn-primary">
+                <a href="https://raw.githubusercontent.com/HanabiraMF/deepseek-webtoharness/main/server.js" download="server.js" class="btn btn-primary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
                     server.js
                 </a>
-                <a href="./用户端脚本.js" download="用户端脚本.js" class="btn btn-primary">
+                <a href="https://raw.githubusercontent.com/HanabiraMF/deepseek-webtoharness/main/%E7%94%A8%E6%88%B7%E7%AB%AF%E8%84%9A%E6%9C%AC.js" download="用户端脚本.js" class="btn btn-primary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                     用户端脚本.js
                 </a>
