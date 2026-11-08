@@ -53,7 +53,8 @@
     let pendingLastTry = 0;
     const PENDING_MAX_RETRIES = 3;
     const toolcallStatusMap = new Map(); // sig -> 'running' | 'success' | 'error' | 'queue'
-    const PROCESS_TIMEOUT = 30 * 1000;
+    const PROCESS_TIMEOUT = 10 * 60 * 1000; // 10 分钟兜底；单批工具 + 多个弹窗累计可能远超 30s，不能太短
+    const interjectQueue = []; // 用户插话队列，随下一次结果回传一并发送
 
     // ===== 消息状态存储：key = data-virtual-list-item-key =====
     const msgStore = new Map(); // key -> { len, lastChange, done, sigs }
@@ -1431,9 +1432,37 @@ ${getPluginsPrompt()}
             const tag = r.status === "error" ? "[失败]" : (r.status === "cancel" ? "[取消]" : "[成功]");
             text += tag + " " + r.op + (r.path ? " (" + r.path + ")" : "") + ":" + "\n" + r.msg + "\n\n";
         }
+        // 插话：用户在执行期间输入的内容，随本次结果一并送达 AI
+        if (interjectQueue.length > 0) {
+            text += "【用户插话】\n";
+            interjectQueue.forEach((msg, i) => { text += (i + 1) + ". " + msg + "\n"; });
+            text += "（以上是用户在任务执行过程中补充的指令，请在继续操作时纳入考虑）\n\n";
+            interjectQueue.length = 0;
+            try { renderInterjectPending(); } catch {}
+        }
         text += "⚠️ 【强制格式警告】系统已开启严格模式：任何没有用 ```toolcall 代码块包裹的裸 XML 都会被直接拒绝执行。";
         text += "下次调用必须严格使用如下格式（缺代码块 = 失败）：\n```toolcall\n<toolcall>\n  <op>工具名</op>\n  <参数>值</参数>\n</toolcall>\n```";
         return text;
+    }
+
+    function renderInterjectPending() {
+        const el = document.getElementById('ds-interject-pending');
+        if (!el) return;
+        if (interjectQueue.length === 0) {
+            el.style.display = 'none';
+            el.textContent = '';
+        } else {
+            el.style.display = 'block';
+            el.textContent = '待发送插话 (' + interjectQueue.length + ')：' + interjectQueue.join(' | ');
+        }
+    }
+
+    function pushInterject(msg) {
+        const m = String(msg || '').trim();
+        if (!m) return false;
+        interjectQueue.push(m);
+        try { renderInterjectPending(); } catch {}
+        return true;
     }
 
 
@@ -1747,6 +1776,11 @@ ${getPluginsPrompt()}
                 <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
             </div>
             <div id="ds-main-container" style="display:none;flex-direction:column;gap:8px;">
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <input id="ds-interject-input" class="ds-input" type="text" placeholder="插话（AI 执行时也会插队到下次结果）" style="flex:1;font-size:12px;" />
+                    <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;padding:4px 10px;font-size:11px;">插话</button>
+                </div>
+                <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.4;padding:2px 4px;"></div>
                 <label style="font-size:12px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;">
                     <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
                 </label>
@@ -1784,6 +1818,19 @@ ${getPluginsPrompt()}
             if (state === 'active') dot.classList.add('active');
             if (state === 'working') dot.classList.add('working');
         };
+        const interjectInput = $('ds-interject-input');
+        const interjectBtn = $('ds-interject-btn');
+        const submitInterject = () => {
+            const v = interjectInput.value;
+            if (!pushInterject(v)) return;
+            interjectInput.value = '';
+            log('已加入插话队列，将随下次结果发送');
+            // 若当前没有正在进行的处理，立刻触发一次回传把插话送出去
+            if (!isProcessing && !isCoolingDown) checkAndProcess();
+        };
+        interjectBtn.addEventListener('click', submitInterject);
+        interjectInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitInterject(); });
+
         autoToggle.addEventListener('change', () => { autoMode = autoToggle.checked; });
         throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; });
 
@@ -1941,6 +1988,8 @@ ${getPluginsPrompt()}
             msgStore.clear();
         toolcallStatusMap.clear();
             pendingResults = null;
+            interjectQueue.length = 0;
+            try { renderInterjectPending(); } catch {}
             if (observer) { observer.disconnect(); observer = null; }
             if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
             clearTimeout(observeTimeout);
