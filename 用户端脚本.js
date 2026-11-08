@@ -52,20 +52,7 @@
     let pendingRetries = 0;
     let pendingLastTry = 0;
     const PENDING_MAX_RETRIES = 3;
-    const executedSigs = new Map();
     const toolcallStatusMap = new Map(); // sig -> 'running' | 'success' | 'error' | 'queue'
-    const SIG_TTL = 10 * 60 * 1000;
-    const alreadyExecuted = (sig) => {
-        const t = executedSigs.get(sig);
-        return !!(t && Date.now() - t < SIG_TTL);
-    };
-    const markExecuted = (sig) => {
-        executedSigs.set(sig, Date.now());
-        if (executedSigs.size > 200) {
-            const cutoff = Date.now() - SIG_TTL;
-            for (const [k, t] of executedSigs) if (t < cutoff) executedSigs.delete(k);
-        }
-    };
     const PROCESS_TIMEOUT = 30 * 1000;
 
     // ===== 消息状态存储：key = data-virtual-list-item-key =====
@@ -1551,15 +1538,7 @@ ${getPluginsPrompt()}
             pluginObj.name = pluginName;
             if (!pluginObj.description) pluginObj.description = 'AI 动态生成的插件';
 
-            // 避免重复注册
-            const existingIdx = W.DS_Agent_Plugins.findIndex(p => p.name === pluginName);
-            if (existingIdx >= 0) {
-                W.DS_Agent_Plugins[existingIdx] = pluginObj;
-                return `插件 "${pluginName}" 已更新。`;
-            } else {
-                W.DS_Agent_Plugins.push(pluginObj);
-                return `插件 "${pluginName}" 注册成功，下一轮对话即可直接调用。`;
-            }
+
         } catch (e) {
             throw new ToolError('编译插件', e.message || String(e), '请确保 plugin_js 是合法的 JavaScript 对象字面量');
         }
@@ -1768,7 +1747,6 @@ ${getPluginsPrompt()}
                 result = { op: call.op, path: call.path, status: 'error', msg: `[失败] ${call.op}\n原因: ${e.message}` };
             }
             st.sigs.add(sig);
-            markExecuted(sig);
             log(`→ ${result.status}: ${String(result.msg).split('\n')[0]}`);
             results.push(result);
         }
