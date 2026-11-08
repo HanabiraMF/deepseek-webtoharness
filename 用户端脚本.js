@@ -231,13 +231,14 @@
 【核心规则】
 1. 【第一铁律】每一次工具调用，必须把完整的 <toolcall> 包裹在 \`\`\`toolcall 代码块中。绝对禁止输出裸 XML。不包代码块 = 调用失败。
 2. 【绝对真实】任何目录结构、文件内容、命令结果必须通过工具获取，严禁编造或凭记忆作答。看不到就调工具看。
-3. 【先读后写】修改文件���，必须先 openfile 读取当前内容，再 edit。禁止盲目覆盖。
+3. 【先读后写】修改文件前，必须先 openfile 读取当前内容，再 edit。禁止盲目覆盖。
 4. 【自动备份】writefile / edit / editline / append / replaceall 执行前，系统会自动生成 .bak 备份，可放心操作。
 5. 【批量执行】多个互不依赖的操作（读多个文件、跑多条命令），请在同一个回复里输出多个 toolcall 代码块，系统会按顺序执行并一次性返回全部结果。这比一个个来快得多。
 6. 【严谨传参】路径一律用相对路径；参数值含特殊字符（引号、&、<、>、换行）时用 <![CDATA[...]]> 包裹；edit 的 old 必须与文件内容完全一致且唯一。
 7. 【失败自省】收到 [失败] 时：仔细读原因 → 修正参数或换方法 → 重试。看到无输出先检查退出码，不要假设成功。
 8. 【禁止重复】每个 toolcall 只发一次。结果返回后（无论成功失败）都基于结果继续，绝对不要把同一个调用原样再发一次。
-9. 【禁区】严禁删除、覆写或破坏 server.js 和 plugins/ 目录（包括其中任何插件文件）。它们承载着本地互联的基础设施，除非用户在当前对话中明确要求删除，否则一律不得触碰。
+9. 【工程经验】复杂或多行的大段替换，优先写一个临时 Node.js 脚本（writefile + exec）按行号/字符串处理，不要用 edit 硬拼超长内容，容易因为特殊字符导致替换失败。Windows 下给 PowerShell 写脚本文件，必须在开头加 UTF-8 BOM（\uFEFF），否则中文乱码会导致语法错误。写入的文件内容若包含字面量 XML 标签，请用字符串拼接生成（如 "<"+"tag"+">"），避免被解析器截断。
+10. 【禁区】严禁删除、覆写或破坏 server.js 和 plugins/ 目录（包括其中任何插件文件）。它们承载着本地互联的基础设施，除非用户在当前对话中明确要求删除，否则一律不得触碰。
 
 【工作区信息】
 绝对路径：${absPath}
@@ -535,7 +536,7 @@ ${getPluginsPrompt()}
             const sig = String(text.length) + '_' + hashStr(text);
             if (pre.getAttribute('data-ds-folded') === sig) return;
 
-            const matches = text.match(/<toolcall>[\s\S]*?<\/toolcall>/g) || [];
+            const matches = matchToolcalls(text);
             if (!matches.length) return;
 
             const block = pre.closest('.md-code-block') || pre;
@@ -733,6 +734,42 @@ ${getPluginsPrompt()}
         };
     }
 
+
+    // CDATA 感知的 toolcall 匹配器
+    // 问题：内容里出现字面量 <toolcall> 时，非贪婪正则会在内部的 </toolcall> 处提前截断
+    // 方案：遍历时跳过 CDATA 区块，并对外层标签做配对计数
+    function matchToolcalls(text) {
+        const results = [];
+        const CDO = "<![CDATA[";
+        const CDC = "]]>";
+        let i = 0;
+        while (i < text.length) {
+            const start = text.indexOf("<toolcall>", i);
+            if (start === -1) break;
+            let j = start + 10;
+            let depth = 1;
+            let end = -1;
+            while (j < text.length) {
+                if (text.startsWith(CDO, j)) {
+                    const cdataEnd = text.indexOf(CDC, j + CDO.length);
+                    if (cdataEnd === -1) { j += CDO.length; continue; }
+                    j = cdataEnd + CDC.length;
+                    continue;
+                }
+                if (text.startsWith("<toolcall>", j)) { depth++; j += 10; continue; }
+                if (text.startsWith("</toolcall>", j)) {
+                    depth--;
+                    if (depth === 0) { end = j + 11; break; }
+                    j += 11;
+                    continue;
+                }
+                j++;
+            }
+            if (end > 0) { results.push(text.slice(start, end)); i = end; }
+            else { i = start + 10; }
+        }
+        return results;
+    }
     function parseToolcalls(container) {
         const clone = container.cloneNode(true);
         clone.querySelectorAll('.ds-think-content').forEach(el => el.remove());
@@ -756,7 +793,7 @@ ${getPluginsPrompt()}
 
         const calls = [];
         for (const rawText of rawTexts) {
-            const matches = rawText.match(/<toolcall>[\s\S]*?<\/toolcall>/g) || [];
+            const matches = matchToolcalls(rawText);
             for (const tcStr of matches) {
                 const c = extractCallFromRaw(tcStr);
                 if (c) calls.push(c);
