@@ -299,7 +299,7 @@
 ]]></plugin_js>
 
 方式 B：服务端永久插件（Node.js 环境，无跨域限制，可持久化）
-如果你需要访问本地文件、数据库、没有跨域限制的网络请求等，可以用 writefile 将 Node.js 代码写到 `plugins/xxx.js`，然后调用 `reload_server_plugins` 热加载！
+如果你需要访问本地文件、数据库、没有跨域限制的网络请求等，可以用 writefile 将 Node.js 代码写到 'plugins/xxx.js'，然后调用 'reload_server_plugins' 热加载！
 服务端插件模板 (plugins/xxx.js)：
 module.exports = {
     name: 'my_node_tool',
