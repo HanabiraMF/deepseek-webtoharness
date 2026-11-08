@@ -39,6 +39,7 @@ loadServerPlugins();
 // ===== 工作区（可变状态）=====
 const INIT_WORKSPACE = path.resolve(process.env.DS_AGENT_WORKSPACE || process.cwd());
 let WORKSPACE = INIT_WORKSPACE;
+let isPicking = false; // 文件夹选择框并发锁
 
 function setWorkspace(p) {
     if (!p || typeof p !== 'string') throw new Error('工作区路径为空');
@@ -49,6 +50,14 @@ function setWorkspace(p) {
     console.log(`[工作区] 已切换 -> ${WORKSPACE}`);
     return WORKSPACE;
 }
+
+// 临时文件清理（进程退出兜底）
+const tmpFilesToClean = new Set();
+process.on('exit', () => {
+    for (const f of tmpFilesToClean) { try { fs.unlinkSync(f); } catch {} }
+});
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
 
 // 弹出系统原生文件夹选择框（Windows 用 PowerShell，macOS 用 osascript）
 function pickFolderNative() {
@@ -71,12 +80,13 @@ if ($f.ShowDialog() -eq 'OK') {
 }
 `;
             const tmpFile = path.join(os.tmpdir(), 'ds_pick_folder_' + Date.now() + '.ps1');
-            try { fs.writeFileSync(tmpFile, psScript, 'utf8'); } catch (e) { return resolve({ ok: false, error: e.message }); }
+            try { fs.writeFileSync(tmpFile, psScript, 'utf8'); tmpFilesToClean.add(tmpFile); }
+            catch (e) { return resolve({ ok: false, error: e.message }); }
             
             execFile('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', tmpFile],
                 { timeout: 300000, windowsHide: true },
                 (err, stdout) => {
-                    try { fs.unlinkSync(tmpFile); } catch {}
+                    try { fs.unlinkSync(tmpFile); tmpFilesToClean.delete(tmpFile); } catch {}
                     if (err) return resolve({ ok: false, error: err.message });
                     const p = String(stdout || '').trim();
                     if (!p) return resolve({ ok: false, error: '用户取消或未选择' });
@@ -142,6 +152,8 @@ function decodeBuffer(buf) {
     return buf.toString('utf8');
 }
 const checkOrigin = (req) => !req.headers.origin || ALLOWED_ORIGINS.has(req.headers.origin);
+// 严格来源：必须带 Origin 且在白名单内（用于敏感本地操作）
+const checkStrictOrigin = (req) => !!req.headers.origin && ALLOWED_ORIGINS.has(req.headers.origin);
 const checkToken = (req) => !REQUIRE_TOKEN || req.headers['x-agent-token'] === TOKEN;
 
 const server = http.createServer(async (req, res) => {
@@ -175,9 +187,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && pathname === '/workspace/pick') {
-        // 弹出系统原生文件夹选择框；用户选定后立即切换工作区
+        // 弹框属于敏感操作：必须来自白名单 Origin，防止本地程序反复触发弹窗
+        if (!checkStrictOrigin(req)) return sendJson(res, 403, { error: '仅允许网页端调用弹框' });
+        // 并发锁：避免连点弹出多个选择框
+        if (isPicking) return sendJson(res, 200, { ok: false, error: '已有一个选择框在等待，请先完成或取消' });
+        isPicking = true;
         try {
             const r = await pickFolderNative();
+
             if (!r.ok) return sendJson(res, 200, { ok: false, error: r.error });
             try {
                 const abs = setWorkspace(r.path);
@@ -187,6 +204,8 @@ const server = http.createServer(async (req, res) => {
             }
         } catch (e) {
             return sendJson(res, 200, { ok: false, error: e.message });
+        } finally {
+            isPicking = false;
         }
     }
 
@@ -208,12 +227,15 @@ const server = http.createServer(async (req, res) => {
             const MAX_FILE = 500 * 1024, MAX_DEPTH = 8, MAX_RESULTS = 200;
             const SKIP_DIRS = new Set(['.git','node_modules','dist','build','venv','.venv','__pycache__','target','.next','out','.idea','.vscode','obj','bin','debug','release']);
             const SKIP_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.ico','.exe','.dll','.so','.dylib','.bin','.pdf','.zip','.tar','.gz','.7z','.resources','.baml','.cache','.pyc','.obj','.pdb','.mp4','.mp3','.woff','.woff2','.ttf']);
+            const isBackup = (name) => /\.bak$/i.test(name); // 自动备份文件不进 grep / glob
 
             function safe(p) {
                 if (p === undefined || p === null || p === '') p = '.';
                 const abs = path.resolve(WORKSPACE, String(p));
                 const rel = path.relative(WORKSPACE, abs);
-                if (rel && (rel.startsWith('..') || path.isAbsolute(rel))) throw new Error('不允许访问工作区外路径: ' + p);
+                if (rel && (rel.startsWith('..') || path.isAbsolute(rel))) {
+                    throw Object.assign(new Error('不允许访问工作区外路径: ' + p), { type: '越界' });
+                }
                 return abs;
             }
             function relOf(abs) {
@@ -402,6 +424,7 @@ const server = http.createServer(async (req, res) => {
                                 if (SKIP_DIRS.has(name.toLowerCase())) continue;
                                 walk(full, depth + 1);
                             } else {
+                                if (isBackup(name)) continue;
                                 const ext = '.' + name.split('.').pop().toLowerCase();
                                 if (SKIP_EXTS.has(ext) || s.size > MAX_FILE) continue;
                                 try {
@@ -561,35 +584,83 @@ const server = http.createServer(async (req, res) => {
 
             const isWin = process.platform === 'win32';
             const shell = isWin ? 'cmd.exe' : '/bin/sh';
-            const args = isWin ? ['/c', `chcp 65001 >nul && ${command}`] : ['-c', command];
-            
+
+            // 关键：把命令写入临时脚本再执行，彻底规避命令行引号/&/%/> 被转义层吞掉
+            const os = require('os');
+            const tmpScript = path.join(os.tmpdir(),
+                'ds_exec_' + Date.now() + '_' + Math.floor(Math.random() * 1000) + (isWin ? '.bat' : '.sh'));
+            try {
+                const scriptBody = isWin
+                    ? '@echo off\r\nchcp 65001 >nul\r\n' + command
+                    : '#!/bin/sh\n' + command;
+                fs.writeFileSync(tmpScript, scriptBody, 'utf8');
+                if (!isWin) { try { fs.chmodSync(tmpScript, 0o755); } catch {} }
+            } catch (e) {
+                return sendJson(res, 500, { error: '无法创建临时执行脚本: ' + e.message });
+            }
+
+            const args = isWin ? ['/c', tmpScript] : [tmpScript];
             const child = require('child_process').spawn(shell, args, { cwd: workDir, windowsHide: true });
+            // 进程退出即清理临时脚本（正常结束、超时后台结束都覆盖）
+            child.on('exit', () => { try { fs.unlinkSync(tmpScript); } catch {} });
             
             let output = '';
-            let killedByTimeout = false;
+            let outputTruncated = false;
+            let detachListeners = null;
             let responded = false;
+            let clientGone = false;
 
-            const sendResponse = (exitCode, msg = '') => {
-                if (responded) return;
-                responded = true;
-                sendJson(res, 200, { output: output + msg, exitCode, pid: child.pid });
+            const appendOutput = (d) => {
+                if (outputTruncated) return;
+                output += d.toString('utf8');
+                // 超过上限后保留尾部（最新输出更有价值），并停止追加
+                if (output.length > MAX_BUFFER) {
+                    output = output.slice(-MAX_BUFFER);
+                    outputTruncated = true;
+                }
             };
 
-            child.stdout.on('data', d => output += d.toString('utf8'));
-            child.stderr.on('data', d => output += d.toString('utf8'));
+            const sendResponse = (exitCode, msg = '', extra = {}) => {
+                if (responded) return;
+                responded = true;
+                const payload = Object.assign({ output: output + msg, exitCode, pid: child.pid }, extra);
+                if (outputTruncated) payload.truncated = true;
+                sendJson(res, 200, payload);
+            };
+
+            // 前台监听：超时后解绑，防止长驻进程持续写内存
+            const onStdout = d => appendOutput(d);
+            const onStderr = d => appendOutput(d);
+            child.stdout.on('data', onStdout);
+            child.stderr.on('data', onStderr);
+            detachListeners = () => {
+                try { child.stdout.removeListener('data', onStdout); } catch {}
+                try { child.stderr.removeListener('data', onStderr); } catch {}
+            };
             
             child.on('close', code => {
-                if (!killedByTimeout) sendResponse(code === null ? 1 : code);
+                detachListeners();
+                if (!responded) sendResponse(code === null ? 1 : code);
             });
             
             child.on('error', err => {
+                detachListeners();
                 sendResponse(1, `\n[启动失败] ${err.message}`);
             });
 
-            setTimeout(() => {
+            // 客户端断开（页面刷新、fetch 中断）：杀掉进程，避免孤儿
+            res.on('close', () => {
                 if (!responded) {
-                    killedByTimeout = true;
-                    sendResponse(0, `\n[进程运行超过 ${timeout/1000} 秒，已转入后台运行。PID: ${child.pid}。如果觉得卡死，可使用 kill_process 终止]`);
+                    clientGone = true;
+                    detachListeners();
+                    try { child.kill(); } catch {}
+                }
+            });
+
+            setTimeout(() => {
+                if (!responded && !clientGone) {
+                    detachListeners();
+                    sendResponse(0, `\n[进程运行超过 ${timeout/1000} 秒，已转入后台运行。PID: ${child.pid}。如果觉得卡死，可使用 kill_process 终止]`, { background: true });
                 }
             }, parseInt(timeout, 10));
             
