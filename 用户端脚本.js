@@ -1835,6 +1835,7 @@ ${getPluginsPrompt()}
         if (location.href !== currentChatUrl) {
             currentChatUrl = location.href;
             msgStore.clear();
+        toolcallStatusMap.clear();
             return;
         }
 
@@ -2037,6 +2038,7 @@ ${getPluginsPrompt()}
                 dsSetStatus('active', `已连接: ${dirHandle.name}`);
                 log(`授权成功: ${dirHandle.name}`);
                 msgStore.clear();
+        toolcallStatusMap.clear();
                 currentChatUrl = location.href;
 
                 const herePrompt = `现在开始，你可以使用工具了。\n\n【工作区信息】\n绝对路径：${absPath}\n当前目标：${goal}`;
@@ -2080,6 +2082,7 @@ ${getPluginsPrompt()}
             if (cooldownTimer) { clearTimeout(cooldownTimer); cooldownTimer = null; }
             executedSigs.clear();
             msgStore.clear();
+        toolcallStatusMap.clear();
             pendingResults = null;
             if (observer) { observer.disconnect(); observer = null; }
             if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
@@ -2133,6 +2136,7 @@ ${getPluginsPrompt()}
                     newChatBtn.click();
                     setTimeout(async () => {
                         msgStore.clear();
+        toolcallStatusMap.clear();
                         currentChatUrl = location.href;
                         await sendMessage(getInitPrompt(absPath, "【前情提要：历史对话压缩摘要】\n" + summary + "\n\n请阅读上述摘要，了解工作进度。接下来请告诉我你想从哪里继续？"));
                     }, 1500);
