@@ -21,3 +21,9 @@ calc/obj/
 
 # AI 生成的服务端插件（本地私有）
 plugins/
+
+# 网页抓取缓存（web_page 插件生成）
+.cache_web/
+
+# 发布用的整合包（仅上传蓝奏云，不进仓库）
+*.zip
