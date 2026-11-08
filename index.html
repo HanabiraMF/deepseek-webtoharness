@@ -222,6 +222,27 @@
             <li><strong>连接与授权：</strong>刷新 DeepSeek 网页，在左侧面板点击“开启模式”，依次选择工作区目录、输入绝对路径和任务目标。</li>
         </ul>
 
+        <div class="section-title">🔌 社区拓展：注入你的自定义工具</div>
+        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 40px;">
+            <p style="color: var(--text-muted); margin-bottom: 16px;">
+                觉得内置工具不够用？你可以通过注入一段简单的 <code>JavaScript</code>（例如放在油猴脚本的最末尾），注册属于你自己的工具，AI 将自动学会使用它！
+            </p>
+            <pre style="background: #0b0e14; padding: 16px; border-radius: 8px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 0.9rem; color: #a5b4fc; line-height: 1.5; border: 1px solid #1f2937;">
+<span style="color: #6b7280;">// 在脚本末尾或控制台注入即可生效</span>
+window.DS_Agent_Plugins.push({
+  name: <span style="color: #4ade80;">"say_hello"</span>, <span style="color: #6b7280;">// 工具名称 (AI 调用时的 op)</span>
+  description: <span style="color: #4ade80;">"向某人打招呼。参数：name"</span>, <span style="color: #6b7280;">// 告诉 AI 怎么用</span>
+  execute: async (args) => {
+    <span style="color: #6b7280;">// args 包含所有提取出的参数（如 args.extraArgs.name）</span>
+    const target = args.extraArgs?.name || <span style="color: #4ade80;">"世界"</span>;
+    return `你好，${target}！很高兴认识你。`;
+  }
+});</pre>
+            <p style="color: #6b7280; font-size: 0.85rem; margin-top: 12px;">
+                * 无需修改主脚本代码，AI 的提示词字典会自动追加该工具的 <code>description</code>，并在执行时自动路由到你的 <code>execute</code> 函数。
+            </p>
+        </div>
+
         <div class="download-section">
             <h2>获取文件</h2>
             <p style="color: var(--text-muted); margin-top: 8px;">点击下方按钮直接下载最新的核心文件</p>

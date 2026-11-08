@@ -13,6 +13,7 @@
     'use strict';
 
     const W = (typeof unsafeWindow !== 'undefined' && unsafeWindow) ? unsafeWindow : window;
+    W.DS_Agent_Plugins = W.DS_Agent_Plugins || []; // 初始化社区插件注册表
 
     const Svg = (inner, size = 14, extra = '') =>
         `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" class="ds-svg ${extra}">${inner}</svg>`;
@@ -249,7 +250,18 @@
 - chmod: <path>文件</path><mode>755</mode> (修改权限；类 Unix 用 chmod 语法，Windows 用 +R/-R 走 attrib)
 - sleep: <timeout>1000</timeout> (休眠指定毫秒，最大 5 分钟；用于轮询间隔或等待外部进程)
 - gettime: (获取当前时间)
+
+${getPluginsPrompt()}
 `;
+    }
+
+    function getPluginsPrompt() {
+        if (!window.DS_Agent_Plugins || window.DS_Agent_Plugins.length === 0) return '';
+        let prompt = '【社区拓展工具】\n';
+        window.DS_Agent_Plugins.forEach(p => {
+            prompt += `- ${p.name}: ${p.description}\n`;
+        });
+        return prompt;
     }
 
     function parsePath(raw) {
@@ -779,6 +791,20 @@
             let mm;
             while ((mm = re.exec(om[1])) !== null) options.push(mm[1].trim());
         }
+        // 提取所有自定义标签存入 extraArgs（排除已知的核心标签）
+        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option']);
+        const extraArgs = {};
+        const tagRegex = /<([a-zA-Z0-9_]+)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+        let match;
+        while ((match = tagRegex.exec(tcStr)) !== null) {
+            const tag = match[1].toLowerCase();
+            if (!knownTags.has(tag)) {
+                let val = match[2].trim();
+                if (val.startsWith('<![CDATA[')) val = val.slice(9, -3);
+                extraArgs[tag] = val;
+            }
+        }
+
         return {
             op, path: extractTag(tcStr, 'path'), reason: extractTag(tcStr, 'reason'),
             content: extractTag(tcStr, 'content'), old: extractTag(tcStr, 'old'),
@@ -791,6 +817,7 @@
             path1: extractTag(tcStr, 'path1'), path2: extractTag(tcStr, 'path2'),
             method: (extractTag(tcStr, 'method') || 'GET').toUpperCase(),
             headers: extractTag(tcStr, 'headers'), text: extractTag(tcStr, 'text'), options,
+            extraArgs
         };
     }
 
@@ -1479,7 +1506,22 @@
             case 'chmod': return toolChmod(call);
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
-            default: throw new ToolError('分发', `未知工具 "${op}"`, '检查工具名拼写');
+            default: {
+                // 尝试在社区插件中查找
+                if (window.DS_Agent_Plugins) {
+                    const plugin = window.DS_Agent_Plugins.find(p => p.name.toLowerCase() === op);
+                    if (plugin && typeof plugin.execute === 'function') {
+                        try {
+                            // 将 call 的所有参数传给插件
+                            const result = await plugin.execute(call);
+                            return String(result);
+                        } catch (e) {
+                            throw new ToolError('插件执行', e.message || String(e), '请检查插件代码');
+                        }
+                    }
+                }
+                throw new ToolError('分发', `未知工具 "${op}"`, '检查工具名拼写');
+            }
         }
     }
 
