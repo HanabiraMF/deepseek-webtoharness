@@ -887,8 +887,8 @@ ${getPluginsPrompt()}
         clone.querySelectorAll('.ds-think-content').forEach(el => el.remove());
         clone.querySelectorAll('.ds-fold-list').forEach(el => el.remove()); // 移除新加的折叠 DOM 防干扰
         const rawTexts = [];
+        // 只提取 pre 标签内的文本，彻底放弃对裸文本的兜底，防止思考过程或正文被误识别
         clone.querySelectorAll('pre').forEach(b => rawTexts.push(b.textContent));
-        if (!rawTexts.some(t => t.includes('<toolcall>'))) rawTexts.push(clone.innerText || '');
 
         const calls = [];
         for (const rawText of rawTexts) {
