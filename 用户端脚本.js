@@ -710,7 +710,7 @@ ${getPluginsPrompt()}
         pickAll(SEL.userMsg).forEach(el => {
             if (el.getAttribute('data-ds-hidden') === 'true') return;
             const text = el.innerText || '';
-            if (text.includes('【系统执行结果】') || text.startsWith('【系统提示：本地互联模式已开启')) {
+            if (text.trim().startsWith('【系统执行结果】\n') || text.trim().startsWith('【系统提示：本地互联模式已开启')) {
                 el.setAttribute('data-ds-hidden', 'true');
                 const parent = el.parentElement;
                 if (!parent || parent.querySelector('.ds-user-tool-card')) return;
@@ -1894,7 +1894,7 @@ ${getPluginsPrompt()}
                 </div>
                 <div id="ds-goal-container" style="display:none;flex-direction:column;gap:6px;">
                     <span style="font-size:11px;color:#888;">本次任务目标:</span>
-                    <input id="ds-goal-input" class="ds-input" type="text" placeholder="例如：帮我写一个贪吃蛇游戏" />
+                    <input id="ds-goal-input" class="ds-input" type="text" placeholder="输入目标（留空则由 AI 自行探索）" />
                     <span style="font-size:11px;color:#888;margin-top:4px;">启动方式:</span>
                     <label style="font-size:12px;color:#ccc;display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="radio" name="ds-start-mode" value="new" checked> 在新对话开始（推荐）
@@ -1973,8 +1973,11 @@ ${getPluginsPrompt()}
                 return;
             }
             if (step === 2) {
-                const goal = goalInput.value.trim();
-                if (!goal) return alert('请输入任务目标');
+                let goal = goalInput.value.trim();
+                const isGoalEmpty = !goal;
+                if (isGoalEmpty) {
+                    goal = '未指定（请务必先执行 listdir "." 扫描工作区结构，根据现有文件自行推测并决定任务目标）';
+                }
                 const startModeEl = document.querySelector('input[name="ds-start-mode"]:checked');
                 const startMode = startModeEl ? startModeEl.value : 'new';
 
