@@ -1789,6 +1789,7 @@ ${getPluginsPrompt()}
             if (!sent) {
                 retryCount++;
                 log(`回传失败（${lastReason}），10 秒后自动重试（第 ${retryCount} 次）...`);
+                showToast('warning', `网络波动，回传失败。10 秒后自动重试...`, 3000);
                 dsSetStatus('working', '自动重试中');
                 await sleep(SEND_RETRY_MS);
             }
