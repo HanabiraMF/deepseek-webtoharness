@@ -237,6 +237,7 @@
 4. 批量执行：多个无依赖的操作（如连续读多个文件、执行多个命令），请一次性输出多个 toolcall 代码块，系统会按顺序执行并统一返回。
 5. 严谨传参：路径用相对路径；含特殊字符时必须用 <![CDATA[...]]> 包裹；edit 的 old 必须与文件绝对一致且唯一。
 6. 失败自省：收到 [失败]，仔细看原因，修正后重试。遇到执行命令无输出，务必检查退出码。
+7. 【禁区】严禁删除、覆写或破坏 server.js 和 plugins/ 目录（包括其中任何插件文件）。它们承载着本地互联的基础设施，除非用户在当前对话中明确要求删除，否则一律不得触碰。
 
 【工作区信息】
 绝对路径：${absPath}
@@ -2014,9 +2015,9 @@ ${getPluginsPrompt()}
             </div>
             <div id="ds-setup-container" style="display:flex;flex-direction:column;gap:8px;">
                 <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
-                    <span style="font-size:11px;color:#eab308;line-height:1.4;">${I.warning} 浏览器无法自动获取绝对路径，请提供工作区绝对路径以便执行命令。</span>
-                    <input id="ds-abs-input" class="ds-input" type="text" placeholder="例如 D:\\workspace\\project" />
-                    <span style="font-size:11px;color:#888;line-height:1.4;">本地服务 Token（server 启动时打印，可选）:</span>
+                    <span style="font-size:11px;color:#888;line-height:1.4;">后端工作区（由本地服务自动提供）:</span>
+                    <code id="ds-workspace-path" style="font-size:11px;color:#4CAF50;word-break:break-all;line-height:1.5;">（点击"下一步"后自动获取）</code>
+                    <span style="font-size:11px;color:#888;line-height:1.4;margin-top:4px;">本地服务 Token（server 启动时打印，可选）:</span>
                     <input id="ds-token-input" class="ds-input" type="password" placeholder="留空表示不使用 token" />
                 </div>
                 <div id="ds-goal-container" style="display:none;flex-direction:column;gap:6px;">
@@ -2048,7 +2049,7 @@ ${getPluginsPrompt()}
         const dot = $('ds-dot'), statusEl = $('ds-status'), logEl = $('ds-log');
         const connectBtn = $('ds-connect-btn'), disconnectBtn = $('ds-disconnect-btn');
         const setupContainer = $('ds-setup-container'), mainContainer = $('ds-main-container');
-        const absContainer = $('ds-abs-container'), absInput = $('ds-abs-input');
+        const absContainer = $('ds-abs-container'), workspacePathEl = $('ds-workspace-path');
         const tokenInput = $('ds-token-input');
         const goalContainer = $('ds-goal-container'), goalInput = $('ds-goal-input');
         const autoToggle = $('ds-auto-toggle');
@@ -2076,23 +2077,33 @@ ${getPluginsPrompt()}
             if (step === 0) {
                 try {
                     tempDirHandle = await W.showDirectoryPicker({ mode: 'readwrite' });
-                    step = 1;
-                    absContainer.style.display = 'flex';
-                    absInput.value = '';
-                    tokenInput.value = agentToken;
-                    connectBtn.textContent = '下一步';
-                    dsSetStatus('working', '配置路径');
-                } catch {}
+                } catch { return; }
+                step = 1;
+                absContainer.style.display = 'flex';
+                workspacePathEl.textContent = '（点击"下一步"后自动获取）';
+                tokenInput.value = agentToken;
+                connectBtn.textContent = '下一步';
+                dsSetStatus('working', '填写 Token');
                 return;
             }
             if (step === 1) {
-                absPath = absInput.value.trim();
-                if (!absPath) return alert('请填写工作区绝对路径');
                 agentToken = tokenInput.value.trim();
                 if (agentToken) localStorage.setItem(TOKEN_KEY, agentToken);
                 else localStorage.removeItem(TOKEN_KEY);
+                dsSetStatus('working', '获取工作区...');
+                try {
+                    const resp = await agentFetch('/workspace', {}, 8000);
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    const data = await resp.json();
+                    if (!data.cwd) throw new Error('后端返回为空');
+                    absPath = data.cwd;
+                } catch (e) {
+                    alert('无法获取后端工作区：' + e.message + '\n请确认 server.js 正在运行、Token 正确。');
+                    dsSetStatus('none', '获取失败');
+                    return;
+                }
+                workspacePathEl.textContent = absPath;
                 step = 2;
-                absContainer.style.display = 'none';
                 goalContainer.style.display = 'flex';
                 goalInput.focus();
                 connectBtn.textContent = '启动对话';

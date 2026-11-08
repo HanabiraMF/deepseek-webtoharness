@@ -97,6 +97,10 @@ const server = http.createServer(async (req, res) => {
     try { pathname = new URL(req.url, `http://127.0.0.1:${PORT}`).pathname; }
     catch { return sendJson(res, 400, { error: 'Bad URL' }); }
 
+    if ((req.method === 'POST' || req.method === 'GET') && pathname === '/workspace') {
+        return sendJson(res, 200, { cwd: process.cwd() });
+    }
+
     if ((req.method === 'POST' || req.method === 'GET') && pathname === '/plugins/list') {
         const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description }));
         return sendJson(res, 200, { plugins: list });
