@@ -207,7 +207,7 @@
 
     // ===== 右上角悬浮通知 =====
     let toastContainer = null;
-    function showToast(type, message, duration = 3000) {
+    W.dsShowToast = function(type, message, duration = 3000) {
         if (!toastContainer) {
             toastContainer = document.createElement('div');
             toastContainer.className = 'ds-toast-container';
@@ -233,7 +233,8 @@
             toast.classList.remove('show');
             setTimeout(() => toast.remove(), 300);
         }, duration);
-    }
+    };
+    const showToast = W.dsShowToast;
 
     function getInitPrompt(absPath, taskGoal) {
         return `【系统指令：本地工作区智能体】
