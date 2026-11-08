@@ -231,7 +231,7 @@
 【核心规则】
 1. 【第一铁律】必须使用代码块！每一次工具调用，必须把完整的 <toolcall> 包裹在 \`\`\`toolcall 代码块中。绝对禁止直接输出裸 XML。如果你不包代码块，系统将无法解析。
 2. 绝对真实：任何目录、文件内容必须通过工具获取，严禁编造。
-3. 先读后写：修改文件前，必须先 openfile 读取内容，再 edit。禁止盲改。
+3. 先读后写：修改文件前，必须先 openfile 读取内容，再 edit。禁止盲���。
 3. 备份机制：系统在 writefile 和 edit 前，会自动将原文件另存为 .bak 备份，故可放心执行，但需注意目录整洁。
 4. 批量执行：多个无依赖的操作（如连续读多个文件、执行多个命令），请一次性输出多个 toolcall 代码块，系统会按顺序执行并统一返回。
 5. 严谨传参：路径用相对路径；含特殊字符时必须用 <![CDATA[...]]> 包裹；edit 的 old 必须与文件绝对一致且唯一。
@@ -239,7 +239,7 @@
 7. 【禁区】严禁删除、覆写或破坏 server.js 和 plugins/ 目录（包括其中任何插件文件）。它们承载着本地互联的基础设施，除非用户在当前对话中明确要求删除，否则一律不得触碰。
 
 【工作区信息】
-绝对路径：${absPath}（即后端 server.js 启动所在目录，所有文件工具均在此目录下执行）
+绝对路径：${absPath}（用户通过原生对话框选定的工作区，所有文件工具与 exec 均在此目录下执行，无法越界访问）
 当前目标：${taskGoal}
 
 【输出格式强制要求】
@@ -1619,8 +1619,11 @@ ${getPluginsPrompt()}
             </div>
             <div id="ds-setup-container" style="display:flex;flex-direction:column;gap:8px;">
                 <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
-                    <span style="font-size:11px;color:#888;line-height:1.4;">后端工作区（由本地服务自动提供）:</span>
-                    <code id="ds-workspace-path" style="font-size:11px;color:#4CAF50;word-break:break-all;line-height:1.5;">（点击"下一步"后自动获取）</code>
+                    <span style="font-size:11px;color:#888;line-height:1.4;">工作区目录（AI 将在此目录下操作文件）:</span>
+                    <div style="display:flex;gap:6px;align-items:flex-start;">
+                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#4CAF50;word-break:break-all;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
+                        <button id="ds-pick-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;padding:4px 10px;font-size:11px;">选择目录</button>
+                    </div>
                     <span style="font-size:11px;color:#888;line-height:1.4;margin-top:4px;">本地服务 Token（server 启动时打印，可选）:</span>
                     <input id="ds-token-input" class="ds-input" type="password" placeholder="留空表示不使用 token" />
                 </div>
@@ -1655,6 +1658,7 @@ ${getPluginsPrompt()}
         const setupContainer = $('ds-setup-container'), mainContainer = $('ds-main-container');
         const absContainer = $('ds-abs-container'), workspacePathEl = $('ds-workspace-path');
         const tokenInput = $('ds-token-input');
+        const pickBtn = $('ds-pick-btn');
         const goalContainer = $('ds-goal-container'), goalInput = $('ds-goal-input');
         const autoToggle = $('ds-auto-toggle');
         const throttleToggle = $('ds-throttle-toggle');
@@ -1677,20 +1681,69 @@ ${getPluginsPrompt()}
         autoToggle.addEventListener('change', () => { autoMode = autoToggle.checked; });
         throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; });
 
+        async function doPickWorkspace() {
+            dsSetStatus('working', '等待选择目录...');
+            pickBtn.disabled = true;
+            const oldTxt = pickBtn.textContent;
+            pickBtn.textContent = '等待中...';
+            try {
+                const resp = await agentFetch('/workspace/pick', {}, 300000);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                if (!data.ok) {
+                    dsSetStatus('working', '未选择目录');
+                    log(`选择目录失败: ${data.error || '已取消'}`);
+                    return false;
+                }
+                absPath = data.cwd;
+                workspacePathEl.textContent = absPath;
+                dsSetStatus('working', '目录已选定');
+                log(`工作区: ${absPath}`);
+                return true;
+            } catch (e) {
+                dsSetStatus('none', '选择失败');
+                alert('选择目录失败：' + e.message + '\n请确认本地服务正在运行。');
+                return false;
+            } finally {
+                pickBtn.disabled = false;
+                pickBtn.textContent = oldTxt;
+            }
+        }
+
+        pickBtn.addEventListener('click', doPickWorkspace);
+
         connectBtn.addEventListener('click', async () => {
             if (step === 0) {
                 step = 1;
                 absContainer.style.display = 'flex';
-                workspacePathEl.textContent = '（点击"下一步"后自动获取）';
                 tokenInput.value = agentToken;
                 connectBtn.textContent = '下一步';
-                dsSetStatus('working', '填写 Token');
+                dsSetStatus('working', '选择工作区');
+                // 自动探一次当前工作区（不弹框，仅用于展示），用户可再点"选择目录"更换
+                try {
+                    const resp = await agentFetch('/workspace', {}, 8000);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        if (data.cwd) {
+                            absPath = data.cwd;
+                            workspacePathEl.textContent = data.cwd;
+                        }
+                    } else if (resp.status === 403) {
+                        workspacePathEl.textContent = '（需填写正确 Token 后才能获取）';
+                    }
+                } catch (e) {
+                    workspacePathEl.textContent = '（无法连接本地服务）';
+                }
                 return;
             }
             if (step === 1) {
                 agentToken = tokenInput.value.trim();
                 if (agentToken) localStorage.setItem(TOKEN_KEY, agentToken);
                 else localStorage.removeItem(TOKEN_KEY);
+                if (!absPath) {
+                    const picked = await doPickWorkspace();
+                    if (!picked) return;
+                }
                 dsSetStatus('working', '连接本地服务...');
                 try {
                     const resp = await agentFetch('/workspace', {}, 8000);

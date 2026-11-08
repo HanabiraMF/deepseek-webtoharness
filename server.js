@@ -36,6 +36,67 @@ function loadServerPlugins() {
 }
 loadServerPlugins();
 
+// ===== 工作区（可变状态）=====
+const INIT_WORKSPACE = path.resolve(process.env.DS_AGENT_WORKSPACE || process.cwd());
+let WORKSPACE = INIT_WORKSPACE;
+
+function setWorkspace(p) {
+    if (!p || typeof p !== 'string') throw new Error('工作区路径为空');
+    const abs = path.resolve(p);
+    const st = fs.statSync(abs); // 不存在会抛错
+    if (!st.isDirectory()) throw new Error('不是目录: ' + abs);
+    WORKSPACE = abs;
+    console.log(`[工作区] 已切换 -> ${WORKSPACE}`);
+    return WORKSPACE;
+}
+
+// 弹出系统原生文件夹选择框（Windows 用 PowerShell，macOS 用 osascript）
+function pickFolderNative() {
+    return new Promise((resolve) => {
+        const { execFile } = require('child_process');
+        if (process.platform === 'win32') {
+            // FolderBrowserDialog，且置顶
+            const ps = [
+                'Add-Type -AssemblyName System.Windows.Forms;',
+                '$d = New-Object System.Windows.Forms.FolderBrowserDialog;',
+                "$d.Description = '请选择 AI 工作区目录';",
+                "$d.RootFolder = 'MyComputer';",
+                '$f = New-Object System.Windows.Forms.Form;',
+                '$f.TopMost = $true;',
+                "$null = $d.ShowDialog($f);",
+                'if ($d.SelectedPath) { Write-Output $d.SelectedPath }'
+            ].join(' ');
+            execFile('powershell.exe', ['-NoProfile', '-STA', '-Command', ps],
+                { timeout: 300000, windowsHide: true },
+                (err, stdout) => {
+                    if (err) return resolve({ ok: false, error: err.message });
+                    const p = String(stdout || '').trim();
+                    if (!p) return resolve({ ok: false, error: '用户取消或未选择' });
+                    resolve({ ok: true, path: p });
+                });
+        } else if (process.platform === 'darwin') {
+            execFile('osascript', ['-e', 'POSIX path of (choose folder with prompt "请选择 AI 工作区目录")'],
+                { timeout: 300000 },
+                (err, stdout) => {
+                    if (err) return resolve({ ok: false, error: err.message });
+                    const p = String(stdout || '').trim().replace(/\/$/, '');
+                    if (!p) return resolve({ ok: false, error: '用户取消' });
+                    resolve({ ok: true, path: p });
+                });
+        } else {
+            // Linux: 尝试 zenity / kdialog
+            execFile('sh', ['-c', 'command -v zenity >/dev/null && zenity --file-selection --directory --title="请选择 AI 工作区目录" || kdialog --getexistingdirectory ~'],
+                { timeout: 300000 },
+                (err, stdout) => {
+                    if (err) return resolve({ ok: false, error: '未找到图形选择器（zenity/kdialog）' });
+                    const p = String(stdout || '').trim();
+                    if (!p) return resolve({ ok: false, error: '用户取消' });
+                    resolve({ ok: true, path: p });
+                });
+        }
+    });
+}
+
 const PORT = parseInt(process.env.DS_AGENT_PORT || '39999', 10);
 const MAX_BODY = 1024 * 1024;
 const MAX_BUFFER = 10 * 1024 * 1024;
@@ -98,14 +159,41 @@ const server = http.createServer(async (req, res) => {
     catch { return sendJson(res, 400, { error: 'Bad URL' }); }
 
     if ((req.method === 'POST' || req.method === 'GET') && pathname === '/workspace') {
-        return sendJson(res, 200, { cwd: process.cwd() });
+        // 只读取当前工作区，不弹框
+        return sendJson(res, 200, { cwd: WORKSPACE, base: __dirname });
+    }
+
+    if (req.method === 'POST' && pathname === '/workspace/pick') {
+        // 弹出系统原生文件夹选择框；用户选定后立即切换工作区
+        try {
+            const r = await pickFolderNative();
+            if (!r.ok) return sendJson(res, 200, { ok: false, error: r.error });
+            try {
+                const abs = setWorkspace(r.path);
+                return sendJson(res, 200, { ok: true, cwd: abs });
+            } catch (e) {
+                return sendJson(res, 200, { ok: false, error: '所选目录无效: ' + e.message });
+            }
+        } catch (e) {
+            return sendJson(res, 200, { ok: false, error: e.message });
+        }
+    }
+
+    if (req.method === 'POST' && pathname === '/workspace/set') {
+        // 直接指定工作区（备用，例如前端记住上次选择）
+        try {
+            const { path: p } = JSON.parse(await readBody(req) || '{}');
+            const abs = setWorkspace(p);
+            return sendJson(res, 200, { ok: true, cwd: abs });
+        } catch (e) {
+            return sendJson(res, 200, { ok: false, error: e.message });
+        }
     }
 
     if (req.method === 'POST' && pathname === '/fs') {
         try {
             const body = JSON.parse(await readBody(req) || '{}');
             const { op } = body;
-            const WORKSPACE = process.cwd();
             const MAX_FILE = 500 * 1024, MAX_DEPTH = 8, MAX_RESULTS = 200;
             const SKIP_DIRS = new Set(['.git','node_modules','dist','build','venv','.venv','__pycache__','target','.next','out','.idea','.vscode','obj','bin','debug','release']);
             const SKIP_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.ico','.exe','.dll','.so','.dylib','.bin','.pdf','.zip','.tar','.gz','.7z','.resources','.baml','.cache','.pyc','.obj','.pdb','.mp4','.mp3','.woff','.woff2','.ttf']);
@@ -451,14 +539,13 @@ const server = http.createServer(async (req, res) => {
             if (typeof command !== 'string' || !command.trim())
                 return sendJson(res, 400, { error: '缺少 command' });
 
-            let workDir = process.cwd();
+            let workDir = WORKSPACE;
             if (typeof cwd === 'string' && cwd.trim()) {
-                const c = cwd.trim();
-                let st;
-                try { st = fs.statSync(c); }
-                catch { return sendJson(res, 400, { error: `cwd 不存在: ${c}`, hint: '请在插件面板重新填写工作区绝对路径' }); }
-                if (!st.isDirectory()) return sendJson(res, 400, { error: `cwd 不是目录: ${c}`, hint: 'absPath 应指向工作区根目录' });
-                workDir = c;
+                const c = path.resolve(WORKSPACE, cwd.trim());
+                let st = null;
+                try { st = fs.statSync(c); } catch {}
+                if (st && st.isDirectory()) workDir = c;
+                else console.warn(`[exec] cwd 无效，已回落到工作区: ${cwd} -> ${WORKSPACE}`);
             }
 
             const isWin = process.platform === 'win32';
