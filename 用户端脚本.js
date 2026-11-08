@@ -2085,7 +2085,7 @@ ${getPluginsPrompt()}
                 let goal = goalInput.value.trim();
                 const isGoalEmpty = !goal;
                 if (isGoalEmpty) {
-                    goal = '未指定（请务必先执行 listdir "." 扫描工作区结构，根据现有文件自行推测并决定任务目标）';
+                    goal = '未指定（请自主探索当前工作区，根据观察到的文件结构，自行推测并决定你能提供的任务目标）';
                 }
                 const startModeEl = document.querySelector('input[name="ds-start-mode"]:checked');
                 const startMode = startModeEl ? startModeEl.value : 'new';
