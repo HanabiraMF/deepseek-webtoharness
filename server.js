@@ -125,7 +125,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && pathname === '/exec') {
         try {
-            const { command, cwd, timeout = EXEC_TIMEOUT } = JSON.parse(await readBody(req) || '{}');
+            const { command, cwd, timeout = 30000 } = JSON.parse(await readBody(req) || '{}');
             if (typeof command !== 'string' || !command.trim())
                 return sendJson(res, 400, { error: '缺少 command' });
 
@@ -139,22 +139,58 @@ const server = http.createServer(async (req, res) => {
                 workDir = c;
             }
 
-            let finalCommand = command;
-            if (process.platform === 'win32') {
-                finalCommand = `chcp 65001 >nul && ${command}`;
-            }
+            const isWin = process.platform === 'win32';
+            const shell = isWin ? 'cmd.exe' : '/bin/sh';
+            const args = isWin ? ['/c', `chcp 65001 >nul && ${command}`] : ['-c', command];
+            
+            const child = require('child_process').spawn(shell, args, { cwd: workDir, windowsHide: true });
+            
+            let output = '';
+            let killedByTimeout = false;
+            let responded = false;
 
-            exec(finalCommand,
-                { timeout: parseInt(timeout, 10), maxBuffer: MAX_BUFFER, cwd: workDir, encoding: 'buffer' },
-                (error, stdoutBuf, stderrBuf) => {
-                    let exitCode = 0;
-                    if (error) exitCode = error.killed ? -1 : (typeof error.code === 'number' ? error.code : 1);
-                    sendJson(res, 200, {
-                        output: decodeBuffer(stdoutBuf) + decodeBuffer(stderrBuf),
-                        exitCode,
-                    });
+            const sendResponse = (exitCode, msg = '') => {
+                if (responded) return;
+                responded = true;
+                sendJson(res, 200, { output: output + msg, exitCode, pid: child.pid });
+            };
+
+            child.stdout.on('data', d => output += d.toString('utf8'));
+            child.stderr.on('data', d => output += d.toString('utf8'));
+            
+            child.on('close', code => {
+                if (!killedByTimeout) sendResponse(code === null ? 1 : code);
+            });
+            
+            child.on('error', err => {
+                sendResponse(1, `\n[启动失败] ${err.message}`);
+            });
+
+            setTimeout(() => {
+                if (!responded) {
+                    killedByTimeout = true;
+                    sendResponse(0, `\n[进程运行超过 ${timeout/1000} 秒，已转入后台运行。PID: ${child.pid}。如果觉得卡死，可使用 kill_process 终止]`);
                 }
-            );
+            }, parseInt(timeout, 10));
+            
+        } catch (e) { sendJson(res, 400, { error: e.message }); }
+        return;
+    }
+
+    if (req.method === 'POST' && pathname === '/exec/kill') {
+        try {
+            const { pid } = JSON.parse(await readBody(req) || '{}');
+            if (!pid) return sendJson(res, 400, { error: '缺少 pid' });
+            
+            if (process.platform === 'win32') {
+                require('child_process').exec(`taskkill /F /PID ${pid} /T`, (err, stdout, stderr) => {
+                    sendJson(res, 200, { output: `进程 ${pid} 已被强制终止。\n${stdout}\n${stderr}`, exitCode: 0 });
+                });
+            } else {
+                require('child_process').exec(`kill -9 ${pid}`, (err, stdout, stderr) => {
+                    sendJson(res, 200, { output: `进程 ${pid} 已被强制终止。\n${stdout}\n${stderr}`, exitCode: 0 });
+                });
+            }
         } catch (e) { sendJson(res, 400, { error: e.message }); }
         return;
     }
