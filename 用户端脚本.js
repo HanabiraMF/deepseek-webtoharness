@@ -848,7 +848,7 @@ ${getPluginsPrompt()}
             while ((mm = re.exec(om[1])) !== null) options.push(mm[1].trim());
         }
         // 提取所有自定义标签存入 extraArgs（排除已知的核心标签）
-        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js']);
+        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js', 'cwd', 'ms']);
         const extraArgs = {};
         const tagRegex = /<([a-zA-Z0-9_]+)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
         let match;
@@ -874,6 +874,7 @@ ${getPluginsPrompt()}
             method: (extractTag(tcStr, 'method') || 'GET').toUpperCase(),
             headers: extractTag(tcStr, 'headers'), text: extractTag(tcStr, 'text'), options,
             plugin_name: extractTag(tcStr, 'plugin_name'), plugin_js: extractTag(tcStr, 'plugin_js'),
+            cwd: extractTag(tcStr, 'cwd'), ms: extractTag(tcStr, 'ms'),
             extraArgs
         };
     }
