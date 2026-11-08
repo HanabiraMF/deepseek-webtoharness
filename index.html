@@ -243,6 +243,30 @@ window.DS_Agent_Plugins.push({
             </p>
         </div>
 
+        <div class="section-title">🤖 开发者专属：让 AI 帮你写插件</div>
+        <div style="background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 40px;">
+            <p style="color: var(--text-muted); margin-bottom: 16px;">
+                这是给 AI 看的接口文档。你可以把下面的内容直接发给 ChatGPT / Claude / DeepSeek，让它们为你生成符合规范的插件代码，然后直接粘贴进油猴脚本中。
+            </p>
+            <textarea readonly id="ai-prompt" style="width: 100%; height: 180px; background: #0b0e14; color: #a5b4fc; border: 1px solid #1f2937; border-radius: 8px; padding: 12px; font-family: ui-monospace, monospace; font-size: 0.85rem; resize: vertical; line-height: 1.5;">
+你是一个 AI 智能体的插件开发者。我正在使用一个名为 "DeepSeek WebtoHarness" 的工具，它支持通过 JS 注入自定义插件。
+
+插件必须是一个包含 execute 函数的 JS 对象，格式如下：
+window.DS_Agent_Plugins.push({
+  name: "your_tool_name", // 英文小写+下划线
+  description: "用一句话向 AI 解释这个工具的功能和参数",
+  execute: async (args) => {
+    // args 包含内置工具的参数，自定义参数在 args.extraArgs 中
+    // 可以在这里调用 fetch、操作 DOM 或读取浏览器剪贴板
+    return "给 AI 看的执行结果文本";
+  }
+});
+
+请帮我编写一个插件，功能是：[在这里输入你想要的功能，例如：获取当前页面的所有标题]
+            </textarea>
+            <button onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt').value); this.innerText='已复制!'; setTimeout(()=>this.innerText='一键复制给 AI', 2000);" class="btn btn-outline" style="margin-top: 12px; font-size: 0.9rem; padding: 8px 16px;">一键复制给 AI</button>
+        </div>
+
         <div class="download-section">
             <h2>获取文件</h2>
             <p style="color: var(--text-muted); margin-top: 8px;">点击下方按钮直接下载最新的核心文件</p>

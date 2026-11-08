@@ -250,6 +250,21 @@
 - chmod: <path>文件</path><mode>755</mode> (修改权限；类 Unix 用 chmod 语法，Windows 用 +R/-R 走 attrib)
 - sleep: <timeout>1000</timeout> (休眠指定毫秒，最大 5 分钟；用于轮询间隔或等待外部进程)
 - gettime: (获取当前时间)
+- register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个自定义工具，下一轮即可直接调用)
+
+【自举能力：创造并使用自定义工具】
+当你发现现有工具无法满足需求时，可以自己编写 JavaScript 插件，通过 register_plugin 注册后直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
+<plugin_js><![CDATA[
+({
+    name: 'my_tool',
+    description: '我的自定义工具',
+    execute: async (args) => {
+        // 在这里写逻辑，可以调用 fetch、操作 DOM、使用 window.DS_Agent_Plugins 等
+        // args 包含了 xml 标签解析出的所有参数，自定义标签在 args.extraArgs 中
+        return '执行结果文本';
+    }
+})
+]]></plugin_js>
 
 ${getPluginsPrompt()}
 `;
@@ -1467,6 +1482,40 @@ ${getPluginsPrompt()}
         }
     }
 
+    async function toolRegisterPlugin(call) {
+        if (!call.plugin_name || !call.plugin_js) {
+            throw new ToolError('参数校验', '缺少 plugin_name 或 plugin_js', '请提供插件名称和执行代码');
+        }
+        const pluginName = call.plugin_name.toLowerCase().replace(/[^a-z0-9_]/g, '');
+        if (!pluginName) throw new ToolError('参数校验', 'plugin_name 格式非法', '只能包含字母、数字和下划线');
+
+        try {
+            // 用 Function 执行 AI 写的代码，返回一个 JS 对象 { name, description, execute }
+            const factory = new Function(`return (${call.plugin_js});`);
+            const pluginObj = factory();
+
+            if (typeof pluginObj !== 'object' || typeof pluginObj.execute !== 'function') {
+                throw new Error('插件必须返回一个包含 execute 函数的对象');
+            }
+
+            // 强制覆盖名称，防止 AI 写错
+            pluginObj.name = pluginName;
+            if (!pluginObj.description) pluginObj.description = 'AI 动态生成的插件';
+
+            // 避免重复注册
+            const existingIdx = W.DS_Agent_Plugins.findIndex(p => p.name === pluginName);
+            if (existingIdx >= 0) {
+                W.DS_Agent_Plugins[existingIdx] = pluginObj;
+                return `插件 "${pluginName}" 已更新。`;
+            } else {
+                W.DS_Agent_Plugins.push(pluginObj);
+                return `插件 "${pluginName}" 注册成功，下一轮对话即可直接调用。`;
+            }
+        } catch (e) {
+            throw new ToolError('编译插件', e.message || String(e), '请确保 plugin_js 是合法的 JavaScript 对象字面量');
+        }
+    }
+
     async function toolSleep(call) {
         const ms = parseInt(call.timeout ?? call.ms ?? 1000, 10);
         if (isNaN(ms) || ms < 0) throw new ToolError('参数校验', 'timeout 必须为非负整数毫秒', '例如 1000');
@@ -1506,6 +1555,7 @@ ${getPluginsPrompt()}
             case 'chmod': return toolChmod(call);
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
+            case 'register_plugin': return toolRegisterPlugin(call);
             default: {
                 // 尝试在社区插件中查找
                 if (window.DS_Agent_Plugins) {
