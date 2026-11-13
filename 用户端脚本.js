@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      2.4
+// @version      2.5
 // @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -2311,7 +2311,7 @@ ${getPluginsPrompt()}
                         <input type="radio" name="ds-start-mode" value="here"> 在当前对话内开始
                     </label>
                     <label id="ds-skip-prompt-label" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;padding-left:20px;">
-                        <input type="checkbox" id="ds-skip-prompt"> 不再发送系统提示词（直接继续监听，仅「当前对话内开始」生效）
+                        <input type="checkbox" id="ds-skip-prompt"> 仅发送极简唤醒（工作区+目标+格式提醒，不发完整提示词）
                     </label>
                 </div>
                 <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
@@ -2562,8 +2562,17 @@ ${getPluginsPrompt()}
                     const primed = primeHistoryToolcalls();
                     if (primed) log(`已跳过当前对话中 ${primed} 个历史工具调用（防止重复执行）`);
                     if (skipPrompt) {
-                        log('已选择不发送系统提示词，直接在当前对话继续监听');
-                        startObserver();
+                        log('已选择跳过完整提示词，发送极简唤醒包');
+                        const briefPrompt = `【本地智能体已就绪】
+工作区: ${absPath}
+当前目标: ${goal || '未指定（请根据我的指示执行）'}
+你可以调用本地工具（文件读写、命令执行等），请严格使用 \`\`\`toolcall 代码块包裹 <toolcall>...</toolcall>。`;
+                        setTimeout(async () => {
+                            const r = await sendMessage(briefPrompt);
+                            if (!r.ok) log(`极简唤醒发送失败: ${r.reason}`);
+                            else log('极简唤醒已发送');
+                            startObserver();
+                        }, 300);
                     } else {
                         setTimeout(async () => {
                             const r = await sendMessage(herePrompt);
