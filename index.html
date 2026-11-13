@@ -4,6 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DeepSeek WebtoHarness - 赋予网页 AI 本地能力</title>
+  <script>
+    // 修复 GitHub Pages 缺尾部斜杠导致的相对路径解析错误
+    if (location.hostname.endsWith('github.io') && !location.pathname.endsWith('/') && !location.pathname.includes('.')) {
+      location.replace(location.pathname + '/' + location.search + location.hash);
+    }
+  </script>
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
