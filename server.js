@@ -67,6 +67,19 @@ function pickFolderNative() {
             const os = require('os');
             const psScript = `
 Add-Type -AssemblyName System.Windows.Forms
+try {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class DSFocusHelper {
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}
+'@
+} catch {}
+$prevWnd = [IntPtr]::Zero
+try { $prevWnd = [DSFocusHelper]::GetForegroundWindow() } catch {}
 $f = New-Object System.Windows.Forms.OpenFileDialog
 $f.ValidateNames = $false
 $f.CheckFileExists = $false
@@ -74,7 +87,14 @@ $f.CheckPathExists = $true
 $f.FileName = "点击打开即选中当前文件夹"
 $f.Filter = "所有文件 (*.*)|*.*"
 $f.Title = "请选择 AI 工作区目录"
-if ($f.ShowDialog() -eq 'OK') {
+$dlgResult = $f.ShowDialog()
+if ($prevWnd -ne [IntPtr]::Zero) {
+    try {
+        [DSFocusHelper]::ShowWindow($prevWnd, 9) | Out-Null
+        [DSFocusHelper]::SetForegroundWindow($prevWnd) | Out-Null
+    } catch {}
+}
+if ($dlgResult -eq [System.Windows.Forms.DialogResult]::OK) {
     $path = Split-Path -Path $f.FileName -Parent
     if ($path) { Write-Output $path } else { Write-Output $f.FileName }
 }
@@ -144,15 +164,6 @@ function readBody(req) {
         req.on('error', reject);
     });
 }
-function decodeBuffer(buf) {
-    if (!buf || buf.length === 0) return '';
-    try {
-        const s = buf.toString('utf8');
-        if (!s.includes('\ufffd')) return s;
-    } catch {}
-    try { return new TextDecoder('gbk').decode(buf); } catch {}
-    return buf.toString('utf8');
-}
 const checkOrigin = (req) => !req.headers.origin || ALLOWED_ORIGINS.has(req.headers.origin);
 // 严格来源：必须带 Origin 且在白名单内（用于敏感本地操作）
 const checkStrictOrigin = (req) => !!req.headers.origin && ALLOWED_ORIGINS.has(req.headers.origin);
@@ -210,9 +221,9 @@ const server = http.createServer(async (req, res) => {
             isPicking = false;
         }
     }
-
     if (req.method === 'POST' && pathname === '/workspace/set') {
-        // 直接指定工作区（备用，例如前端记住上次选择）
+        // 直接切换工作区（用于前端"最近工作区"下拉切换）
+        if (!checkStrictOrigin(req)) return sendJson(res, 403, { error: '仅允许网页端调用' });
         try {
             const { path: p } = JSON.parse(await readBody(req) || '{}');
             const abs = setWorkspace(p);
@@ -222,6 +233,7 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
+
     if (req.method === 'POST' && pathname === '/fs') {
         try {
             const body = JSON.parse(await readBody(req) || '{}');
@@ -230,6 +242,27 @@ const server = http.createServer(async (req, res) => {
             const SKIP_DIRS = new Set(['.git','node_modules','dist','build','venv','.venv','__pycache__','target','.next','out','.idea','.vscode','obj','bin','debug','release']);
             const SKIP_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.ico','.exe','.dll','.so','.dylib','.bin','.pdf','.zip','.tar','.gz','.7z','.resources','.baml','.cache','.pyc','.obj','.pdb','.mp4','.mp3','.woff','.woff2','.ttf']);
             const isBackup = (name) => /\.bak$/i.test(name); // 自动备份文件不进 grep / glob
+            // ===== 危险路径保护 + 审计日志 =====
+            const WRITE_OPS = new Set(['writefile','append','del','move','copy','edit','editline','replaceall','mkdir','batch']);
+            const DANGER_SEGS = ['\\windows\\', '\\program files\\', '\\program files (x86)\\', '\\programdata\\', '\\appdata\\', '\\$recycle.bin\\'];
+            function isDangerPath(abs) {
+                const norm = (String(abs).replace(/\//g, '\\') + '\\').toLowerCase();
+                return DANGER_SEGS.some(s => norm.includes(s));
+            }
+            function checkDanger(abs, op, force) {
+                if (force) return;
+                if (!WRITE_OPS.has(op)) return;
+                if (isDangerPath(abs)) {
+                    throw Object.assign(new Error('危险路径保护：' + abs + ' 位于系统敏感区域（Windows/Program Files/ProgramData/AppData/回收站）。如确需操作，请在 toolcall 中加 <force>true</force> 强制允许。'), { type: '危险路径' });
+                }
+            }
+            function auditLog(op, target, detail) {
+                try {
+                    const logPath = path.join(WORKSPACE, '.ds_audit.log');
+                    const line = '[' + new Date().toISOString() + '] ' + op + ' | ' + target + ' | ' + (detail || '') + '\n';
+                    fs.appendFileSync(logPath, line, 'utf8');
+                } catch (e) {}
+            }
 
             function safe(p) {
                 if (p === undefined || p === null || p === '') p = '.';
@@ -258,10 +291,34 @@ const server = http.createServer(async (req, res) => {
             }
             function ensureDir(abs) { fs.mkdirSync(path.dirname(abs), { recursive: true }); }
 
-            function doListdir(p) {
+            function doListdir(p, tree) {
                 const abs = safe(p);
                 if (!fs.existsSync(abs)) throw new Error('目录不存在: ' + p);
                 if (!fs.statSync(abs).isDirectory()) throw new Error(`"${p}" 是文件不是目录`);
+                if (tree) {
+                    const MAXN = 1000, MAXD = 6;
+                    const lines = [];
+                    let count = 0;
+                    (function walk(dir, prefix, depth) {
+                        if (depth > MAXD) return;
+                        let names; try { names = fs.readdirSync(dir).sort(); } catch { return; }
+                        for (const name of names) {
+                            if (count >= MAXN) { lines.push(prefix + '... (已达上限，请缩小范围)'); return; }
+                            const full = path.join(dir, name);
+                            let s; try { s = fs.statSync(full); } catch { lines.push(prefix + '? ' + name); count++; continue; }
+                            if (s.isDirectory()) {
+                                if (SKIP_DIRS.has(name.toLowerCase())) { lines.push(prefix + 'd ' + name + '/ (已跳过)'); count++; continue; }
+                                lines.push(prefix + 'd ' + name + '/');
+                                count++;
+                                walk(full, prefix + '  ', depth + 1);
+                            } else {
+                                lines.push(prefix + 'f ' + name);
+                                count++;
+                            }
+                        }
+                    })(abs, '', 0);
+                    return `目录树 ${p}:\n` + (lines.length ? lines.join('\n') : '(空目录)');
+                }
                 const items = fs.readdirSync(abs).map(name => {
                     try {
                         const s = fs.statSync(path.join(abs, name));
@@ -270,13 +327,25 @@ const server = http.createServer(async (req, res) => {
                 });
                 return items.length ? items.join('\n') : '(空目录)';
             }
-            function doOpenfile(p) {
+            function doOpenfile(p, offset, limit) {
                 const abs = safe(p);
                 if (!fs.existsSync(abs)) throw new Error('文件不存在: ' + p);
                 if (fs.statSync(abs).isDirectory()) throw new Error(`"${p}" 是目录`);
                 const text = fs.readFileSync(abs, 'utf8');
-                const truncated = text.length > 8000;
-                return `文件 ${p}${truncated ? `（前 8000 字符，共 ${text.length}）` : ''}:\n\`\`\`\n${text.slice(0, 8000)}\n\`\`\``;
+                const total = text.length;
+                let start = parseInt(offset, 10);
+                if (!Number.isFinite(start) || start < 0) start = 0;
+                let len = parseInt(limit, 10);
+                if (!Number.isFinite(len) || len <= 0) len = 8000;
+                len = Math.min(len, 200000);
+                if (start > 0 && start >= total && total > 0) {
+                    return `文件 ${p}（共 ${total} 字符）: offset=${start} 已超出文件长度`;
+                }
+                const slice = text.slice(start, start + len);
+                const end = start + slice.length;
+                const more = end < total;
+                const head = `文件 ${p}（第 ${start}-${end} 字符 / 共 ${total} 字符${more ? `，未完，可设 offset=${end} 继续读` : ''}）:`;
+                return `${head}\n\`\`\`\n${slice}\n\`\`\``;
             }
             function doRead(p) {
                 const abs = safe(p);
@@ -477,6 +546,273 @@ const server = http.createServer(async (req, res) => {
                 const suffix = results.length >= MAX_RESULTS ? '\n...(已达上限)' : '';
                 return results.length ? results.join('\n') + suffix : '(无匹配)';
             }
+            // ===== 全文检索（内容 + 文件名）=====
+            function doSearch(keyword, rootP, opts) {
+                opts = opts || {};
+                const kw = String(keyword == null ? '' : keyword);
+                if (!kw) throw new Error('缺少 pattern（搜索关键词或正则）');
+                const useRegex = !!opts.regex;
+                const namePat = String(opts.name || '').trim();
+                const contextN = Math.max(0, Math.min(parseInt(opts.context, 10) || 0, 5));
+                const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 50, 200));
+                let re;
+                if (useRegex) {
+                    try { re = new RegExp(kw, 'i'); } catch (e) { throw new Error('正则无效: ' + e.message); }
+                } else {
+                    const escKw = kw.replace(/[.*+?^$()|[\]\\{}]/g, '\\            function doStat(p) {');
+                    re = new RegExp(escKw, 'i');
+                }
+                let nameRe = null;
+                if (namePat) { try { nameRe = globToRegex(namePat); } catch (e) {} }
+                const abs = safe(rootP || '.');
+                if (!fs.existsSync(abs)) throw new Error('路径不存在: ' + rootP);
+                const results = [];
+                let totalFiles = 0, totalHits = 0;
+                const matchName = (rel) => {
+                    if (!nameRe) return true;
+                    const base = rel.split('/').pop();
+                    return nameRe.test(base) || nameRe.test(rel);
+                };
+                const scanFile = (full, rel) => {
+                    let text;
+                    try {
+                        const st = fs.statSync(full);
+                        if (!st.isFile() || st.size > MAX_FILE) return;
+                        text = fs.readFileSync(full, 'utf8');
+                    } catch (e) { return; }
+                    if (isBinaryText(text)) return;
+                    totalFiles++;
+                    const lines = text.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        if (re.test(lines[i])) {
+                            totalHits++;
+                            if (results.length >= limit) continue;
+                            const start = Math.max(0, i - contextN);
+                            const end = Math.min(lines.length, i + contextN + 1);
+                            const block = [];
+                            for (let k = start; k < end; k++) {
+                                const mark = (k === i) ? '>' : ' ';
+                                block.push(mark + (k + 1) + ': ' + lines[k].trim().slice(0, 200));
+                            }
+                            results.push(rel + ':' + (i + 1) + ':\n' + block.join('\n'));
+                        }
+                    }
+                };
+                if (fs.statSync(abs).isFile()) {
+                    const rel = relOf(abs);
+                    if (matchName(rel)) scanFile(abs, rel);
+                } else {
+                    (function walk(dir, depth) {
+                        if (depth > MAX_DEPTH) return;
+                        let names; try { names = fs.readdirSync(dir); } catch (e) { return; }
+                        for (const name of names) {
+                            const full = path.join(dir, name);
+                            let s; try { s = fs.statSync(full); } catch (e) { continue; }
+                            if (s.isDirectory()) {
+                                if (SKIP_DIRS.has(name.toLowerCase())) continue;
+                                walk(full, depth + 1);
+                            } else {
+                                if (isBackup(name)) continue;
+                                const ext = '.' + name.split('.').pop().toLowerCase();
+                                if (SKIP_EXTS.has(ext)) continue;
+                                const rel = relOf(full);
+                                if (!matchName(rel)) continue;
+                                scanFile(full, rel);
+                            }
+                        }
+                    })(abs, 0);
+                }
+                const head = '搜索 "' + kw + '"' + (namePat ? ' [文件名过滤:' + namePat + ']' : '') + (useRegex ? ' [正则]' : '') + ' | 扫描 ' + totalFiles + ' 文件 | 命中 ' + totalHits + ' 处';
+                const suffix = results.length >= limit ? '\n...(已达上限 ' + limit + '，请缩小范围或调大 limit)' : '';
+                return head + '\n' + (results.length ? results.join('\n\n') + suffix : '(无匹配)');
+            }
+
+            // ===== 目录树（独立工具，可控深度/过滤）=====
+            function doTree(p, opts) {
+                opts = opts || {};
+                const maxDepth = Math.max(1, Math.min(parseInt(opts.depth, 10) || 4, 10));
+                const filter = String(opts.filter || '').trim();
+                const fExts = filter ? filter.split(/[,;]/).map(x => x.trim().toLowerCase()).filter(Boolean) : null;
+                const MAXN = 2000;
+                const abs = safe(p || '.');
+                if (!fs.existsSync(abs)) throw new Error('目录不存在: ' + (p || '.'));
+                if (!fs.statSync(abs).isDirectory()) throw new Error('"' + (p || '.') + '" 是文件不是目录');
+                const lines = [];
+                let count = 0;
+                (function walk(dir, prefix, depth) {
+                    if (depth > maxDepth) return;
+                    let names; try { names = fs.readdirSync(dir).sort(); } catch (e) { return; }
+                    for (const name of names) {
+                        if (count >= MAXN) return;
+                        const full = path.join(dir, name);
+                        let s; try { s = fs.statSync(full); } catch (e) { continue; }
+                        if (s.isDirectory()) {
+                            if (SKIP_DIRS.has(name.toLowerCase())) { lines.push(prefix + 'D ' + name + '/ (跳过)'); count++; continue; }
+                            lines.push(prefix + 'D ' + name + '/');
+                            count++;
+                            walk(full, prefix + '  ', depth + 1);
+                        } else {
+                            if (fExts) {
+                                const ext = '.' + name.split('.').pop().toLowerCase();
+                                if (!fExts.includes(ext) && !fExts.includes(name.toLowerCase())) continue;
+                            }
+                            const size = s.size < 1024 ? s.size + 'B' : (s.size / 1024).toFixed(1) + 'K';
+                            lines.push(prefix + 'F ' + name + '  (' + size + ')');
+                            count++;
+                        }
+                    }
+                })(abs, '', 0);
+                const head = '目录树 ' + (p || '.') + ' (深度<=' + maxDepth + (filter ? ', 过滤:' + filter : '') + '):';
+                return head + '\n' + (lines.length ? lines.join('\n') : '(空目录)') + (count >= MAXN ? '\n...(已达上限)' : '');
+            }
+
+            // ===== 备份管理 =====
+            function doBackups(p, opts) {
+                opts = opts || {};
+                const root = safe(p || '.');
+                const MAXN = Math.max(1, Math.min(parseInt(opts.limit, 10) || 200, 1000));
+                const list = [];
+                (function walk(dir, depth) {
+                    if (depth > MAX_DEPTH || list.length >= MAXN) return;
+                    let names; try { names = fs.readdirSync(dir); } catch (e) { return; }
+                    for (const name of names) {
+                        if (list.length >= MAXN) return;
+                        const full = path.join(dir, name);
+                        let s; try { s = fs.statSync(full); } catch (e) { continue; }
+                        if (s.isDirectory()) {
+                            if (SKIP_DIRS.has(name.toLowerCase())) continue;
+                            walk(full, depth + 1);
+                        } else if (isBackup(name)) {
+                            const orig = full.slice(0, -4);
+                            list.push({
+                                bak: relOf(full),
+                                orig: relOf(orig),
+                                origExists: fs.existsSync(orig),
+                                size: s.size,
+                                mtime: s.mtimeMs,
+                            });
+                        }
+                    }
+                })(root, 0);
+                if (!list.length) return '没有找到任何 .bak 备份文件';
+                list.sort((a, b) => b.mtime - a.mtime);
+                const fmt = (ms) => new Date(ms).toLocaleString();
+                const lines = list.map((x, i) =>
+                    (i + 1) + '. ' + x.bak + '\n   原文件: ' + x.orig + (x.origExists ? '' : ' (原文件已不存在!)') +
+                    '\n   备份大小: ' + (x.size / 1024).toFixed(1) + 'KB | 备份时间: ' + fmt(x.mtime));
+                const head = '共 ' + list.length + ' 个备份' + (list.length >= MAXN ? '（已达上限）' : '') + '：';
+                return head + '\n\n' + lines.join('\n');
+            }
+
+            // ===== 审计日志查看 =====
+            function doAudit(opts) {
+                opts = opts || {};
+                const logPath = path.join(WORKSPACE, '.ds_audit.log');
+                if (!fs.existsSync(logPath)) return '尚无审计日志（还没有任何写操作被记录）';
+                let text = fs.readFileSync(logPath, 'utf8');
+                const filter = String(opts.filter || opts.pattern || '').trim();
+                const limit = Math.max(1, Math.min(parseInt(opts.limit, 10) || 100, 2000));
+                let lines = text.split('\n').filter(Boolean);
+                if (filter) {
+                    let re;
+                    try { re = new RegExp(filter, 'i'); } catch (e) { throw new Error('filter 正则无效: ' + e.message); }
+                    lines = lines.filter(l => re.test(l));
+                }
+                const total = lines.length;
+                lines = lines.slice(-limit);
+                if (!lines.length) return '审计日志中无匹配记录' + (filter ? '（filter: ' + filter + '）' : '');
+                return '审计日志（显示最后 ' + lines.length + ' 条，共匹配 ' + total + ' 条）:\n' + lines.join('\n');
+            }
+
+            // ===== 清理旧备份 =====
+            function doCleanbaks(p, opts) {
+                opts = opts || {};
+                const keepDays = Math.max(0, parseInt(opts.keepDays, 10) || 0);
+                const keepLatest = Math.max(0, parseInt(opts.keepLatest, 10) || 0);
+                if (!keepDays && !keepLatest) throw new Error('需指定 keepDays（保留最近N天）或 keepLatest（每个文件保留最近N个）');
+                const root = safe(p || '.');
+                const baks = [];
+                (function walk(dir, depth) {
+                    if (depth > MAX_DEPTH) return;
+                    let names; try { names = fs.readdirSync(dir); } catch (e) { return; }
+                    for (const name of names) {
+                        const full = path.join(dir, name);
+                        let s; try { s = fs.statSync(full); } catch (e) { continue; }
+                        if (s.isDirectory()) {
+                            if (SKIP_DIRS.has(name.toLowerCase())) continue;
+                            walk(full, depth + 1);
+                        } else if (isBackup(name)) {
+                            baks.push({ full, name, mtime: s.mtimeMs });
+                        }
+                    }
+                })(root, 0);
+                const toDelete = [];
+                if (keepDays) {
+                    const cutoff = Date.now() - keepDays * 86400000;
+                    for (const b of baks) if (b.mtime < cutoff) toDelete.push(b);
+                }
+                if (keepLatest) {
+                    const groups = {};
+                    for (const b of baks) {
+                        const base = b.full.slice(0, -4);
+                        (groups[base] = groups[base] || []).push(b);
+                    }
+                    for (const k of Object.keys(groups)) {
+                        const arr = groups[k].sort((a, b) => b.mtime - a.mtime);
+                        for (let i = keepLatest; i < arr.length; i++) {
+                            if (!toDelete.includes(arr[i])) toDelete.push(arr[i]);
+                        }
+                    }
+                }
+                let okN = 0, failN = 0;
+                for (const b of toDelete) {
+                    try { fs.unlinkSync(b.full); okN++; }
+                    catch (e) { failN++; }
+                }
+                return '备份清理完成：删除 ' + okN + ' 个' + (failN ? '，失败 ' + failN + ' 个' : '') + '（扫描到 ' + baks.length + ' 个备份）';
+            }
+
+            // ===== 批量文件操作 =====
+            function doBatch(actions, force) {
+                if (!Array.isArray(actions) || !actions.length) throw new Error('actions 必须是非空数组');
+                if (actions.length > 50) throw new Error('单次 batch 最多 50 个操作');
+                const out = [];
+                let okN = 0, failN = 0;
+                for (let i = 0; i < actions.length; i++) {
+                    const a = actions[i] || {};
+                    const aop = String(a.op || '').toLowerCase();
+                    const label = a.path || a.from || '';
+                    try {
+                        if (!aop) throw new Error('缺少 op');
+                        if (!WRITE_OPS.has(aop) || aop === 'batch') throw new Error('batch 仅支持写操作: mkdir/writefile/append/del/move/copy/edit/editline/replaceall');
+                        const targets = [a.path, a.from, a.to].filter(Boolean);
+                        for (const tp of targets) checkDanger(safe(tp), aop, force);
+                        let r;
+                        switch (aop) {
+                            case 'mkdir': r = doMkdir(a.path); break;
+                            case 'writefile': r = doWritefile(a.path, a.content); break;
+                            case 'append': r = doAppend(a.path, a.content); break;
+                            case 'del': r = doDel(a.path); break;
+                            case 'move': r = doMove(a.from, a.to); break;
+                            case 'copy': r = doCopy(a.from, a.to); break;
+                            case 'edit': r = doEdit(a.path, a.old, a.new); break;
+                            case 'editline': r = doEditline(a.path, parseInt(a.line, 10), a.mode, a.content); break;
+                            case 'replaceall': r = doReplaceall(a.path || '.', a.find, a.replace); break;
+                            case 'restore': r = doRestore(a.path); break;
+                            default: throw new Error('不支持的子操作: ' + aop);
+                        }
+                        auditLog('batch:' + aop, label, 'OK');
+                        okN++;
+                        out.push('[' + (i + 1) + '] OK  ' + aop + ' ' + label + ' -> ' + r);
+                    } catch (e) {
+                        failN++;
+                        auditLog('batch:' + aop + ':FAIL', label, e.message);
+                        out.push('[' + (i + 1) + '] FAIL ' + aop + ' ' + label + ' -> ' + e.message);
+                    }
+                }
+                return '批量操作完成：成功 ' + okN + '，失败 ' + failN + '\n' + out.join('\n');
+            }
+
             function doStat(p) {
                 const abs = safe(p);
                 if (!fs.existsSync(abs)) throw new Error('路径不存在: ' + p);
@@ -506,11 +842,24 @@ const server = http.createServer(async (req, res) => {
                 const buf = fs.readFileSync(abs);
                 return `SHA-256: ${crypto.createHash('sha256').update(buf).digest('hex')}\n大小: ${buf.length} 字节`;
             }
+            function doRestore(p) {
+                const abs = safe(p);
+                const bak = abs + '.bak';
+                if (!fs.existsSync(bak)) throw new Error('备份不存在: ' + p + '.bak（只有被 writefile/edit/append 等修改过的文件才有 .bak 备份）');
+                if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) throw new Error('目标是目录，无法恢复');
+                fs.copyFileSync(bak, abs);
+                return `已从备份恢复: ${p}（来源 ${p}.bak）`;
+            }
 
             let result;
+            const forceFlag = body.force === true || body.force === 'true';
+            if (WRITE_OPS.has(op) && op !== 'batch') {
+                const targets = [body.path, body.from, body.to].filter(Boolean);
+                for (const tp of targets) checkDanger(safe(tp), op, forceFlag);
+            }
             switch (op) {
-                case 'listdir': result = doListdir(body.path || '.'); break;
-                case 'openfile': result = doOpenfile(body.path); break;
+                case 'listdir': result = doListdir(body.path || '.', body.tree); break;
+                case 'openfile': result = doOpenfile(body.path, body.offset, body.limit); break;
                 case 'read': result = doRead(body.path); break;
                 case 'mkdir': result = doMkdir(body.path); break;
                 case 'writefile': result = doWritefile(body.path, body.content); break;
@@ -526,6 +875,13 @@ const server = http.createServer(async (req, res) => {
                 case 'stat': result = doStat(body.path); break;
                 case 'diff': result = doDiff(body.path1, body.path2); break;
                 case 'hash': result = doHash(body.path); break;
+                case 'restore': result = doRestore(body.path); break;
+                case 'tree': result = doTree(body.path, body); break;
+                case 'search': result = doSearch(body.pattern || body.keyword, body.path, body); break;
+                case 'batch': result = doBatch(body.actions, forceFlag); break;
+                case 'backups': result = doBackups(body.path, body); break;
+                case 'audit': result = doAudit(body); break;
+                case 'cleanbaks': result = doCleanbaks(body.path, body); break;
                 case 'readb64': {
                     const absB = safe(body.path);
                     if (!fs.existsSync(absB)) throw new Error('文件不存在: ' + body.path);
@@ -537,10 +893,45 @@ const server = http.createServer(async (req, res) => {
                 }
                 default: return sendJson(res, 400, { ok: false, error: '未知 op: ' + op });
             }
+            if (WRITE_OPS.has(op) && op !== 'batch') {
+                auditLog(op, body.path || body.from || body.to || '', forceFlag ? 'force' : '');
+            }
             return sendJson(res, 200, { ok: true, result: String(result) });
         } catch (e) {
             return sendJson(res, 200, { ok: false, error: e.message });
         }
+    }
+
+    if (req.method === 'POST' && pathname === '/download') {
+        // 二进制下载：绕过 JSON 的 1MB 请求体限制，供前端构造 File 拖入输入框
+        try {
+            const { path: p } = JSON.parse(await readBody(req) || '{}');
+            if (!p) return sendJson(res, 400, { error: '缺少 path' });
+            const abs = path.resolve(WORKSPACE, String(p));
+            const rel = path.relative(WORKSPACE, abs);
+            if (rel && (rel.startsWith('..') || path.isAbsolute(rel))) {
+                return sendJson(res, 403, { error: '不允许访问工作区外路径: ' + p });
+            }
+            if (!fs.existsSync(abs)) return sendJson(res, 404, { error: '文件不存在: ' + p });
+            const st = fs.statSync(abs);
+            if (!st.isFile()) return sendJson(res, 400, { error: '不是文件: ' + p });
+            const MAX_DL = 200 * 1024 * 1024;
+            if (st.size > MAX_DL) return sendJson(res, 413, { error: '文件过大（>' + (MAX_DL/1024/1024) + 'MB）' });
+            const ext = path.extname(abs).toLowerCase();
+            const mimeMap = { '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.svg':'image/svg+xml','.bmp':'image/bmp','.ico':'image/x-icon','.pdf':'application/pdf','.txt':'text/plain','.md':'text/markdown','.json':'application/json','.csv':'text/csv','.zip':'application/zip','.mp4':'video/mp4','.mp3':'audio/mpeg' };
+            const mime = mimeMap[ext] || 'application/octet-stream';
+            const fname = encodeURIComponent(path.basename(abs));
+            res.writeHead(200, {
+                'Content-Type': mime,
+                'Content-Length': st.size,
+                'Content-Disposition': "attachment; filename*=UTF-8''" + fname,
+                'Access-Control-Expose-Headers': 'Content-Disposition',
+            });
+            fs.createReadStream(abs).pipe(res);
+        } catch (e) {
+            return sendJson(res, 500, { error: e.message });
+        }
+        return;
     }
 
     if ((req.method === 'POST' || req.method === 'GET') && pathname === '/plugins/list') {
@@ -690,7 +1081,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && pathname === '/fetch') {
         try {
-            const { url, method = 'GET', content, headers = {} } = JSON.parse(await readBody(req) || '{}');
+            const { url, method = 'GET', content, headers = {}, saveTo } = JSON.parse(await readBody(req) || '{}');
             if (typeof url !== 'string' || !/^https?:\/\//i.test(url))
                 return sendJson(res, 400, { error: 'url 必须是 http:// 或 https:// 地址' });
             const m = String(method).toUpperCase();
@@ -726,7 +1117,7 @@ const server = http.createServer(async (req, res) => {
                     resp.on('end', () => resolve({
                         status: resp.statusCode,
                         statusText: resp.statusMessage || '',
-                        text: Buffer.concat(chunks).toString('utf8'),
+                        buf: Buffer.concat(chunks),
                     }));
                     resp.on('error', reject);
                 });
@@ -735,7 +1126,22 @@ const server = http.createServer(async (req, res) => {
                 if (bodyBuf) r.write(bodyBuf);
                 r.end();
             });
-            sendJson(res, 200, result);
+            const text = result.buf.toString('utf8');
+            let savedPath = null;
+            if (typeof saveTo === 'string' && saveTo.trim()) {
+                const abs = path.resolve(WORKSPACE, saveTo.trim());
+                const rel = path.relative(WORKSPACE, abs);
+                if (rel && (rel.startsWith('..') || path.isAbsolute(rel))) {
+                    return sendJson(res, 200, { error: '不允许写入工作区外路径: ' + saveTo, type: '越界' });
+                }
+                fs.mkdirSync(path.dirname(abs), { recursive: true });
+                if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+                    try { fs.copyFileSync(abs, abs + '.bak'); } catch {}
+                }
+                fs.writeFileSync(abs, result.buf);
+                savedPath = rel.split(path.sep).join('/') || '.';
+            }
+            sendJson(res, 200, { status: result.status, statusText: result.statusText, text, bytes: result.buf.length, savedPath });
         } catch (e) {
             sendJson(res, 502, { error: e.message, hint: '检查目标地址是否可达、是否 http(s)、DNS 是否正常' });
         }

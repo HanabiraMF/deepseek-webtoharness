@@ -13,14 +13,16 @@ Thumbs.db
 
 # 备份文件
 *.bak
+_backup_*/
 
 # 测试产物
 sandbox/
 calc/bin/
 calc/obj/
 
-# AI 生成的服务端插件（本地私有）
-plugins/
+# 注意：plugins/ 下的官方插件需要随仓库发布，不再忽略
+# 若需忽略个人私有插件，请使用 plugins/_private/ 并在下方单独忽略
+plugins/_private/
 
 # 网页抓取缓存（web_page 插件生成）
 .cache_web/

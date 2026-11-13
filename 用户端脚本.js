@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.3
 // @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -29,6 +29,7 @@
         arrow:    Svg('<path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>', 12),
         circle:   Svg('<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>', 12),
         circleSpin: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" class="ds-svg ds-spin"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-opacity="0.25" stroke-width="1.5"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+        chevron:  Svg('<path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>', 12),
     };
 
     let isModeOn = false, step = 0;
@@ -44,9 +45,29 @@
     let absPath = '', autoMode = false;
     let observer = null, observeTimeout = null, pollInterval = null;
     let currentChatUrl = location.href, lastExecTime = 0;
+    let isPaused = false;
+    let lastGoal = '';
 
     const TOKEN_KEY = 'ds_agent_token';
     let agentToken = localStorage.getItem(TOKEN_KEY) || '';
+    const WORKSPACES_KEY = 'ds_agent_workspaces';
+    const STATE_KEY = 'ds_agent_state';
+    function loadRecentWorkspaces() {
+        try { return JSON.parse(localStorage.getItem(WORKSPACES_KEY) || '[]') || []; } catch { return []; }
+    }
+    function addRecentWorkspace(p) {
+        if (!p) return;
+        let list = loadRecentWorkspaces().filter(x => x !== p);
+        list.unshift(p);
+        list = list.slice(0, 8);
+        try { localStorage.setItem(WORKSPACES_KEY, JSON.stringify(list)); } catch {}
+    }
+    function saveState() {
+        try { localStorage.setItem(STATE_KEY, JSON.stringify({ isModeOn, absPath, lastGoal, autoMode, autoThrottle })); } catch {}
+    }
+    function loadState() {
+        try { return JSON.parse(localStorage.getItem(STATE_KEY) || 'null'); } catch { return null; }
+    }
 
     let pendingResults = null;
     let pendingRetries = 0;
@@ -55,6 +76,7 @@
     const toolcallStatusMap = new Map(); // sig -> 'running' | 'success' | 'error' | 'queue'
     const PROCESS_TIMEOUT = 10 * 60 * 1000; // 10 分钟兜底；单批工具 + 多个弹窗累计可能远超 30s，不能太短
     const interjectQueue = []; // 用户插话队列，随下一次结果回传一并发送
+    const ignoreKeys = new Set(); // 「在当前对话内开始」时已存在的消息 key：其工具调用一律不执行，避免重跑历史
 
     // ===== 消息状态存储：key = data-virtual-list-item-key =====
     const msgStore = new Map(); // key -> { len, lastChange, done, sigs }
@@ -65,9 +87,7 @@
 
     const SEL = {
         virtualItem:      ['[data-virtual-list-item-key]'],
-        message:          ['.ds-message'],
         assistantContent: ['.ds-assistant-message-main-content', '[class*="assistant-message-main"]'],
-        thinkContent:     ['.ds-think-content'],
         userMsg:          ['.ds-message:not(:has(.ds-assistant-message-main-content))', '.fbb737a4', '[class*="user-message"]'],
         textarea:         ['textarea[placeholder*="DeepSeek"]', 'textarea'],
         sendBtn:          ['div:has(textarea[placeholder*="DeepSeek"]) .ds-button--primary', 'div[role="button"].ds-button--primary', 'div[role="button"][class*="button--primary"]'],
@@ -140,6 +160,33 @@
         return null;
     }
 
+    // 「在当前对话内开始」时调用：把当前页面上已有历史消息里的 toolcall 全部标记为已执行，
+    // 防止刷新页面（executedByKey 内存丢失）后重跑历史调用并回传。
+    function primeHistoryToolcalls() {
+        let n = 0;
+        try {
+            scanMessages();
+            const items = pickAll(SEL.virtualItem);
+            for (const item of items) {
+                if (!pick(SEL.assistantContent, item)) continue;
+                const key = item.getAttribute('data-virtual-list-item-key');
+                if (!key) continue;
+                const parsed = parseToolcalls(item);
+                if (!parsed.calls.length) continue;
+                let set = executedByKey.get(key);
+                if (!set) { set = new Set(); executedByKey.set(key, set); }
+                const st = msgStore.get(key);
+                for (const c of parsed.calls) {
+                    const sig = toolcallSignature(c);
+                    set.add(sig);
+                    if (st) st.sigs.add(sig);
+                    n++;
+                }
+            }
+        } catch (e) { log('预热历史 toolcall 失败: ' + ((e && e.message) || e)); }
+        return n;
+    }
+
     const styleEl = document.createElement('style');
     styleEl.textContent = `
         .ds-svg { display: inline-block; vertical-align: middle; flex-shrink: 0; }
@@ -148,35 +195,59 @@
         @keyframes ds-pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
         @keyframes ds-fadein { to { opacity: 1; } }
         @keyframes ds-slideup { to { transform: translateY(0); } }
-        .ds-panel-container { margin: 8px 12px; padding: 12px; background: var(--dsw-alias-bg-layer-2, #2b2b2b); border-radius: 12px; font-size: 13px; color: var(--dsw-alias-text-primary, #ddd); display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.1)); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        .ds-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #aaa; display: inline-block; margin-right: 6px; flex-shrink: 0; }
-        .ds-status-dot.active { background: #4CAF50; box-shadow: 0 0 8px #4CAF50; animation: ds-pulse 2s infinite; }
+        .ds-panel-container { margin: 8px 12px; padding: 12px; background: var(--dsw-alias-bg-layer-2, #2c2c2e); border-radius: 12px; font-size: 13px; color: var(--dsw-alias-label-primary, #f9fafb); display: flex; flex-direction: column; gap: 10px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+        .ds-status-dot { width: 8px; height: 8px; border-radius: 50%; background: #81858c; display: inline-block; margin-right: 6px; flex-shrink: 0; }
+        .ds-status-dot.active { background: #3964fe; box-shadow: 0 0 8px rgba(57,100,254,0.6); animation: ds-pulse 2s infinite; }
         .ds-status-dot.working { background: #eab308; box-shadow: 0 0 8px #eab308; animation: ds-pulse 1s infinite; }
-        .ds-btn { padding: 8px 12px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; transition: opacity 0.2s; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-family: inherit; }
-        .ds-btn:hover { opacity: 0.85; }
+        .ds-btn { height: 36px; padding: 0 14px; border-radius: 4096px; border: 1px solid transparent; font-weight: 500; cursor: pointer; transition: background-color .15s, border-color .15s, opacity .15s; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-family: inherit; }
         .ds-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .ds-btn-primary { background: var(--dsw-alias-brand-primary, #4CAF50); color: #fff; }
-        .ds-btn-danger { background: var(--dsw-alias-state-error-primary, #d32f2f); color: #fff; }
-        .ds-btn-secondary { background: var(--dsw-alias-bg-layer-1, #333); color: var(--dsw-alias-text-primary, #ddd); border: 1px solid var(--dsw-alias-border-subtle, #444); }
-        .ds-input { padding: 6px 10px; background: var(--dsw-alias-bg-layer-1, #000); border: 1px solid var(--dsw-alias-border-subtle, #444); color: var(--dsw-alias-text-primary, #fff); border-radius: 6px; font-size: 12px; outline: none; width: 100%; box-sizing: border-box; font-family: inherit; }
-        .ds-input:focus { border-color: var(--dsw-alias-brand-primary, #4CAF50); }
-        .ds-log-area { max-height: 200px; overflow-y: auto; font-size: 11px; color: #888; font-family: ui-monospace, monospace; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 6px; line-height: 1.5; white-space: pre-wrap; }
+        .ds-btn-primary { background: var(--dsw-alias-brand-primary, #3964fe); color: #fff; }
+        .ds-btn-primary:hover:not(:disabled) { background: var(--dsw-static-deepseek-450, #5686fe); }
+        .ds-btn-secondary { background: transparent; color: var(--dsw-alias-label-tertiary, #81858c); border-color: rgba(255,255,255,0.12); }
+        .ds-btn-secondary:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: var(--dsw-alias-label-primary, #f9fafb); }
+        .ds-btn-danger { background: transparent; color: var(--dsw-alias-state-error-primary, #f25a5a); border-color: rgba(242,90,90,0.35); }
+        .ds-btn-danger:hover:not(:disabled) { background: rgba(242,90,90,0.12); }
+        .ds-input { padding: 8px 12px; background: var(--dsw-alias-bg-layer-1, #232324); border: 1px solid rgba(255,255,255,0.1); color: var(--dsw-alias-label-primary, #f9fafb); border-radius: 10px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box; font-family: inherit; transition: border-color .15s; }
+        .ds-input:focus { border-color: var(--dsw-alias-brand-primary, #3964fe); }
+        .ds-log-area { max-height: 200px; overflow-y: auto; font-size: 11px; color: #81858c; font-family: ui-monospace, monospace; background: rgba(0,0,0,0.25); padding: 6px; border-radius: 8px; line-height: 1.5; white-space: pre-wrap; }
         .ds-log-area > div { margin-bottom: 2px; }
-        .ds-log-area .err { color: #f87171; }
+        .ds-log-area .err { color: #f25a5a; }
         .ds-log-area .ok { color: #4ade80; }
         .ds-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 99999; display: flex; align-items: center; justify-content: center; opacity: 0; animation: ds-fadein 0.2s forwards; }
-        .ds-dialog { background: var(--dsw-alias-bg-layer-2, #1e1e1e); color: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); border: 1px solid #333; display: flex; flex-direction: column; gap: 14px; transform: translateY(10px); animation: ds-slideup 0.3s forwards; max-height: 85vh; overflow-y: auto; }
-        .ds-compress-btn { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; border-radius: 17px; background: #4CAF50; color: #fff; border: none; cursor: pointer; transition: all 0.2s; white-space: nowrap; box-shadow: 0 2px 6px rgba(76,175,80,0.3); font-size: 13px; font-weight: 600; gap: 6px; font-family: inherit; }
-        .ds-compress-btn:hover { background: #43a047; }
+        .ds-dialog { background: var(--dsw-alias-bg-layer-2, #2c2c2e); color: var(--dsw-alias-label-primary, #f9fafb); border-radius: 12px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; gap: 14px; transform: translateY(10px); animation: ds-slideup 0.3s forwards; max-height: 85vh; overflow-y: auto; }
+        .ds-compress-btn { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; border-radius: 4096px; background: var(--dsw-alias-brand-primary, #3964fe); color: #fff; border: none; cursor: pointer; transition: background-color .15s; white-space: nowrap; font-size: 13px; font-weight: 500; gap: 6px; font-family: inherit; }
+        .ds-compress-btn:hover:not(:disabled) { background: var(--dsw-static-deepseek-450, #5686fe); }
         .ds-compress-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         /* ===== 通用折叠列表 ===== */
-        .ds-fold-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
-        .ds-fold-item { display: flex; flex-direction: column; }
-        .ds-fold-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--dsw-alias-bg-layer-2, #2b2b2b); border: 1px solid var(--dsw-alias-border-subtle, rgba(255,255,255,0.1)); border-radius: 6px; cursor: pointer; font-size: 12px; color: #ccc; font-family: ui-monospace, monospace; user-select: none; }
-        .ds-fold-row:hover { border-color: var(--dsw-alias-brand-primary, #4CAF50); }
-        .ds-fold-row .ds-fold-arrow { display: inline-flex; color: #4CAF50; transition: transform 0.15s; }
-        .ds-fold-row .ds-fold-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .ds-fold-detail { display: none; margin: 4px 0 0; padding: 8px; background: #000; border-radius: 6px; font-size: 11px; color: #4ade80; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, monospace; overflow: auto; max-height: 300px; }
+        .ds-fold-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; width: 100%; box-sizing: border-box; }
+        .ds-user-tool-card { width: 100%; box-sizing: border-box; align-self: stretch; }
+        .ds-user-tool-card .ds-fold-item { width: 100%; box-sizing: border-box; }
+        .ds-fold-item { display: flex; flex-direction: column; border-radius: 10px; transition: background-color .2s; }
+        .ds-fold-row { display: flex; align-items: center; gap: 8px; padding: 9px 12px; background: var(--dsw-alias-bg-layer-2, #2c2c2e); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; cursor: pointer; font-size: 13px; color: var(--dsw-alias-label-primary, #f9fafb); font-family: ui-monospace, monospace; user-select: none; transition: border-color .18s, background-color .18s; }
+        .ds-fold-row:hover { border-color: rgba(57,100,254,0.5); background: var(--dsw-alias-bg-layer-1, #232324); }
+        .ds-fold-row .ds-fold-status { display: inline-flex; flex-shrink: 0; }
+        .ds-fold-row .ds-fold-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ds-fold-row .ds-fold-label b { color: var(--dsw-alias-brand-primary, #3964fe); font-weight: 600; }
+        .ds-fold-row .ds-fold-chevron { display: inline-flex; flex-shrink: 0; color: var(--dsw-alias-label-tertiary, #81858c); transition: transform .25s cubic-bezier(.4,0,.2,1); }
+        .ds-fold-item.open .ds-fold-row .ds-fold-chevron { transform: rotate(90deg); }
+        /* 折叠详情：grid 动画 + 左侧品牌色条 */
+        .ds-fold-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s cubic-bezier(.4,0,.2,1), margin-top .28s cubic-bezier(.4,0,.2,1), opacity .2s; opacity: 0; margin-top: 0; }
+        .ds-fold-item.open .ds-fold-detail { grid-template-rows: 1fr; margin-top: 8px; opacity: 1; }
+        .ds-fold-detail-inner { overflow: hidden; }
+        .ds-fold-detail-body { padding: 10px 12px 10px 14px; background: #0d0f14; border-left: 3px solid var(--dsw-alias-brand-primary, #3964fe); border-radius: 8px; font-size: 12.5px; line-height: 1.65; color: #9aa4b2; word-break: break-word; font-family: ui-monospace, monospace; overflow: auto; max-height: 520px; }
+        .ds-param-list { display: flex; flex-direction: column; gap: 6px; }
+        .ds-param-row { display: flex; gap: 10px; align-items: flex-start; }
+        .ds-param-key { flex-shrink: 0; min-width: 62px; color: var(--dsw-alias-brand-primary, #3964fe); font-weight: 600; font-size: 12px; }
+        .ds-param-val { flex: 1; color: #c8d0da; white-space: pre-wrap; word-break: break-all; font-size: 12.5px; }
+        .ds-param-empty { color: #61666b; font-style: italic; }
+        .ds-raw-details { margin-top: 10px; border-top: 1px dashed rgba(255,255,255,0.1); padding-top: 8px; }
+        .ds-raw-details > summary { cursor: pointer; color: #81858c; font-size: 11px; user-select: none; }
+        .ds-raw-details > summary:hover { color: #3964fe; }
+        .ds-raw-xml { margin: 6px 0 0; padding: 8px; background: rgba(0,0,0,0.4); border-radius: 6px; white-space: pre-wrap; word-break: break-all; color: #7d8590; font-size: 11px; max-height: 260px; overflow: auto; }
+        .ds-custom-render { font-family: inherit; }
+        .ds-plugin-toggle { transition: all .15s; }
+        .ds-plugin-toggle:hover { opacity: 0.85; }
+        #ds-plugin-toolbar-host, #ds-plugin-toggle-host { pointer-events: auto; }
         /* 结果返回样式微调 */
         .ds-result-label { color: #10b981; }
         
@@ -290,8 +361,8 @@ ${taskGoal}
 收到 越界 时不要尝试绕过，应向用户说明；收到 执行失败 时看 error 详情修正路径或操作方式。
 
 【工具字典】
-- listdir: <path>目录</path> (列出目录)
-- openfile: <path>文件</path> (读文件)
+- listdir: <path>目录</path><tree>true</tree> (列出目录；可选 tree=true 递归输出目录树)
+- openfile: <path>文件</path><offset>0</offset><limit>8000</limit> (读文件；可选 offset/limit 按字符分页，大文件可分多次读完)
 - mkdir: <path>目录</path> (创建空目录)
 - edit: <path>文件</path><old><![CDATA[原]]></old><new><![CDATA[新]]></new> (精准替换)
 - editline: <path>文件</path><line>行号</line><mode>replace|insert|delete</mode><content><![CDATA[...]]></content> (按行号编辑)
@@ -300,23 +371,31 @@ ${taskGoal}
 - replaceall: <find><![CDATA[找]]></find><replace><![CDATA[替换为]]></replace><path>目录或文件</path> (跨文件批量替换)
 - grep: <pattern>正则</pattern><path>目录</path> (正则搜索)
 - glob: <pattern>**/*.js</pattern> (通配符搜文件)
+- search: <pattern>关键词</pattern><path>目录</path><regex>false</regex><name>*.js</name><context>2</context><limit>50</limit> (全文检索：返回文件名+行号+上下文，可选正则/文件名过滤/上下文行数/结果上限)
+- tree: <path>目录</path><depth>4</depth><filter>.js,.ts</filter> (目录树：可控深度与扩展名过滤，带文件大小)
+- batch: <actions><![CDATA[ [{"op":"copy","from":"a","to":"b"},{"op":"del","path":"c"}] ]]></actions> (批量写操作，最多50个，逐条返回成败；子op支持 mkdir/writefile/append/del/move/copy/edit/editline/replaceall)
+- attach: <paths>a.png,b.pdf</paths> (把工作区内的文件「拖入」聊天输入框，支持多文件逗号分隔、图片/文档/大文件，上限200MB。常与 send_message 配合)
+- send_message: <content><![CDATA[要发送的文字]]></content> (发送输入框当前内容+已拖入的附件；content 可留空只发附件)
 - del: <path>目标</path> (删除)
 - move: <from>源</from><to>目标</to> (移动/重命名)
 - copy: <from>源</from><to>目标</to> (复制)
 - stat: <path>目标</path> (查看信息)
 - diff: <path1>文件1</path1><path2>文件2</path2> (对比两文件)
 - hash: <path>文件</path> (计算 SHA-256)
+- restore: <path>文件</path> (从 .bak 备份恢复该文件，用于撤销误改)
+- backups: <path>目录</path><limit>200</limit> (列出所有 .bak 备份，按时间倒序，含原文件是否存在、大小、时间。恢复前先查有哪些可恢复)
+- audit: <filter>正则</filter><limit>100</limit> (查看 .ds_audit.log 操作审计记录，可按正则筛选，用于排查"谁在什么时候改了什么")
+- cleanbaks: <path>目录</path><keepDays>7</keepDays><keepLatest>1</keepLatest> (清理旧备份：按天数或每文件保留最近N个，防备份堆积)
+- 【危险路径保护】对 Windows/Program Files/ProgramData/AppData/回收站 等系统敏感区域的写操作会被拒绝。若确需操作（如用户要求整理），在该 toolcall 内加 <force>true</force> 强制允许。所有写操作都会记入工作区 .ds_audit.log
 - readb64: <path>文件</path> (读取文件为 data URL，用于图片展示；一般由 image 工具内部调用)
 - exec: <command>命令</command><cwd>可选</cwd><timeout>可选毫秒</timeout> (自动执行命令，静默返回 stdout/stderr 和退出码)
-- runcmd: <command>命令</command><reason>理由</reason> (需用户弹窗确认执行)
 - waitfile: <path>文件</path><timeout>毫秒</timeout> (轮询等待文件生成)
 - ask: <question>问题</question><options><option>A</option><option>B</option></options> (询问用户)
 - preview: <path>路径</path> (预览网页/文档)
 - openurl: <url>地址</url> (打开网页)
-- fetch: <url>地址</url><method>GET</method><headers><![CDATA[{"Key":"Val"}]]></headers><content><![CDATA[...]]></content> (HTTP请求)
+- fetch: <url>地址</url><method>GET</method><headers><![CDATA[{"Key":"Val"}]]></headers><content><![CDATA[...]]></content><saveTo>path</saveTo> (HTTP请求；可选 saveTo 把响应体保存到工作区文件，适合大响应)
 - image: <path>图片</path> (展示图片)
 - clipboard: <text>文本</text> (复制到剪贴板)
-- chmod: <path>文件</path><mode>755</mode> (修改权限；类 Unix 用 chmod 语法，Windows 用 +R/-R 走 attrib)
 - sleep: <timeout>1000</timeout> (休眠指定毫秒，最大 5 分钟；用于轮询间隔或等待外部进程)
 - gettime: (获取当前时间)
 - register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个【前端】自定义工具，当前页面内存生效)
@@ -378,6 +457,26 @@ module.exports = {
 })
 ]]></plugin_js>
 
+【插件还能挂 UI（可选）】在插件对象里加 ui 字段，注册后自动出现在界面上：
+<plugin_js><![CDATA[
+({
+    name: 'my_tool',
+    description: '我的自定义工具',
+    execute: async (args) => { return '结果'; },
+    ui: {
+        // 发送按钮旁加按钮（onClick 收到 (按钮DOM, 插件对象)）
+        toolbar: [{ label: '我的按钮', title: '悬停提示', onClick: (btn, self) => { alert('clicked'); } }],
+        // 深度思考/智能搜索开关旁加开关（onChange 收到 (state, 插件对象)，状态自动持久化）
+        toggle: [{ label: '我的开关', defaultOn: false, onChange: (on, self) => { console.log('switch', on); } }],
+        // 自定义该工具在折叠框里的参数渲染（返回 HTML 字符串；返回空则用默认参数表）
+        renderTool: (call, self) => {
+            return '<div style="color:#3964fe">自定义展示：' + (call.path || '') + '</div>';
+        }
+    }
+})
+]]></plugin_js>
+注意：register_plugin 每次注册/更新同名插件会自动清理旧 UI，不会重复堆叠。
+
 ${getPluginsPrompt()}
 `;
     }
@@ -417,7 +516,7 @@ ${getPluginsPrompt()}
             o.innerHTML = `
                 <div class="ds-dialog" style="width:${extraHtml ? '720px' : '440px'};">
                     <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:8px;color:#ffb74d;">${I.warning}<span>${esc(title)}</span></h3>
-                    <div style="font-size:13px;">目标：<strong style="color:#4CAF50;word-break:break-all;">${esc(target)}</strong></div>
+                    <div style="font-size:13px;">目标：<strong style="color:#3964fe;word-break:break-all;">${esc(target)}</strong></div>
                     ${reasonHtml}${extraHtml}
                     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px;">
                         <button class="ds-btn ds-btn-secondary" id="act-cancel">拒绝</button>
@@ -431,41 +530,6 @@ ${getPluginsPrompt()}
         });
     }
 
-    function showCmdDialog(cmd, reason) {
-        return new Promise(resolve => {
-            const o = document.createElement('div');
-            o.className = 'ds-overlay';
-            const reasonHtml = reason ? `<div style="background:rgba(255,183,77,0.1);padding:10px;border-radius:6px;font-size:12px;color:#ffb74d;border-left:3px solid #ffb74d;display:flex;align-items:flex-start;gap:6px;"><span style="color:#ffb74d;display:flex;margin-top:1px;">${I.warning}</span><span>${esc(reason)}</span></div>` : '';
-            o.innerHTML = `
-                <div class="ds-dialog" style="width:640px;">
-                    <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:8px;color:#ffb74d;">${I.warning}<span>AI 请求执行命令</span></h3>
-                    ${reasonHtml}
-                    <div style="background:#000;padding:12px;border-radius:6px;font-family:ui-monospace,monospace;font-size:13px;word-break:break-all;border:1px solid #444;user-select:all;color:#4ade80;">${esc(cmd)}</div>
-                    <button class="ds-btn ds-btn-primary" id="cmd-copy" style="align-self:flex-start;">${I.copy}<span>复制命令</span></button>
-                    <div style="font-size:12px;color:#888;">请在终端执行，把输出粘贴回下方（留空代表无输出）：</div>
-                    <textarea id="cmd-output" class="ds-input" placeholder="粘贴执行输出" style="height:140px;font-family:ui-monospace,monospace;resize:vertical;"></textarea>
-                    <div style="display:flex;justify-content:flex-end;gap:10px;">
-                        <button class="ds-btn ds-btn-secondary" id="cmd-cancel">取消</button>
-                        <button class="ds-btn ds-btn-primary" id="cmd-done">完成并回传</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(o);
-            awaitingUser = true;
-            o.querySelector('#cmd-copy').onclick = (e) => {
-                navigator.clipboard.writeText(cmd);
-                const b = e.currentTarget;
-                const old = b.innerHTML;
-                b.innerHTML = `${I.check}<span>已复制</span>`;
-                setTimeout(() => { b.innerHTML = old; }, 1500);
-            };
-            o.querySelector('#cmd-cancel').onclick = () => { awaitingUser = false; o.remove(); resolve({ cancel: true }); };
-            o.querySelector('#cmd-done').onclick = () => {
-                const out = o.querySelector('#cmd-output').value;
-                awaitingUser = false; o.remove(); resolve({ cancel: false, output: out });
-            };
-        });
-    }
-
     function showAskDialog(question, options, reason) {
         return new Promise(resolve => {
             const o = document.createElement('div');
@@ -476,7 +540,7 @@ ${getPluginsPrompt()}
             const reasonHtml = reason ? `<div style="background:rgba(255,183,77,0.1);padding:10px;border-radius:6px;font-size:12px;color:#ffb74d;border-left:3px solid #ffb74d;display:flex;align-items:flex-start;gap:6px;"><span style="color:#ffb74d;display:flex;margin-top:1px;">${I.warning}</span><span>${esc(reason)}</span></div>` : '';
             o.innerHTML = `
                 <div class="ds-dialog" style="width:520px;">
-                    <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:8px;color:#4CAF50;">${I.question}<span>AI 需要你做出选择</span></h3>
+                    <h3 style="margin:0;font-size:15px;display:flex;align-items:center;gap:8px;color:#3964fe;">${I.question}<span>AI 需要你做出选择</span></h3>
                     <div style="font-size:13px;">${esc(question)}</div>
                     ${reasonHtml}
                     <div style="display:flex;flex-direction:column;gap:8px;">${optsHtml}</div>
@@ -506,13 +570,36 @@ ${getPluginsPrompt()}
 
     async function sendMessage(text, timeoutMs = 15000) {
         const start = Date.now();
+        // 记录发送前用户的焦点（通常是插话输入框），发送完成后还原，避免被 DeepSeek 输入框/按钮抢走焦点导致插话框失焦
+        const prevActive = (typeof document !== 'undefined') ? document.activeElement : null;
+        const prevSelStart = (prevActive && typeof prevActive.selectionStart === 'number') ? prevActive.selectionStart : null;
+        const prevSelEnd = (prevActive && typeof prevActive.selectionEnd === 'number') ? prevActive.selectionEnd : null;
+        let focusRestored = false;
+        const restoreFocus = () => {
+            if (focusRestored) return;
+            focusRestored = true;
+            try {
+                if (!prevActive || prevActive === document.body || !document.contains(prevActive)) return;
+                if (prevActive === document.activeElement) return;
+                prevActive.focus({ preventScroll: true });
+                if (prevSelStart != null && typeof prevActive.setSelectionRange === 'function') {
+                    prevActive.setSelectionRange(prevSelStart, prevSelEnd);
+                }
+            } catch (e) {}
+        };
+        const restoreFocusSoon = () => {
+            // 点击发送后浏览器可能异步转移焦点，用两段延时兜底还原
+            try { requestAnimationFrame(restoreFocus); } catch (e) { setTimeout(restoreFocus, 0); }
+            setTimeout(restoreFocus, 120);
+            setTimeout(restoreFocus, 400);
+        };
         let ta = null;
         while (Date.now() - start < timeoutMs) {
             ta = pick(SEL.textarea);
             if (ta) break;
             await sleep(100);
         }
-        if (!ta) return { ok: false, reason: '找不到输入���（页面可能未就绪）' };
+        if (!ta) return { ok: false, reason: '找不到输入框（页面可能未就绪）' };
 
         const Proto = W.HTMLTextAreaElement ? W.HTMLTextAreaElement.prototype : HTMLTextAreaElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(Proto, 'value')?.set;
@@ -522,9 +609,14 @@ ${getPluginsPrompt()}
         while (Date.now() - start < timeoutMs) {
             const btn = pick(SEL.sendBtn);
             const disabled = !btn || btn.className.includes('disabled') || btn.getAttribute('aria-disabled') === 'true';
-            if (!disabled) { btn.click(); return { ok: true }; }
+            if (!disabled) {
+                btn.click();
+                restoreFocusSoon();
+                return { ok: true };
+            }
             await sleep(100);
         }
+        restoreFocusSoon();
         return { ok: false, reason: '发送按钮持续不可用（AI 可能仍在生成）' };
     }
 
@@ -552,7 +644,15 @@ ${getPluginsPrompt()}
     }
 
     function foldToolcalls(root) {
-        const pres = root.querySelectorAll('pre');
+        // 只在正文容器内折叠，避免把思考区里的 toolcall 也折成卡片（思考区与正文是兄弟节点）
+        const scopes = [];
+        try {
+            const mains = root.querySelectorAll('.ds-assistant-message-main-content');
+            if (mains.length) mains.forEach(m => scopes.push(m));
+            else scopes.push(root);
+        } catch { scopes.push(root); }
+        const pres = [];
+        scopes.forEach(sc => sc.querySelectorAll('pre').forEach(p => pres.push(p)));
         pres.forEach(pre => {
             const text = pre.textContent || '';
             if (!text.includes('<toolcall>')) return;
@@ -590,21 +690,16 @@ ${getPluginsPrompt()}
 
                 const row = document.createElement('div');
                 row.className = 'ds-fold-row';
-                row.innerHTML = `<span class="ds-fold-arrow" style="color:${initialColor}" data-state="${status}">${initialIcon}</span><span class="ds-fold-label"><b>${esc(op)}</b> · ${esc(summary)}</span>`;
+                row.innerHTML = `<span class="ds-fold-status" style="color:${initialColor}" data-state="${status}">${initialIcon}</span><span class="ds-fold-label"><b>${esc(op)}</b> · ${esc(summary)}</span><span class="ds-fold-chevron">${I.chevron}</span>`;
 
                 const detail = document.createElement('div');
                 detail.className = 'ds-fold-detail';
-                detail.textContent = rawCall;
+                detail.innerHTML = `<div class="ds-fold-detail-inner"><div class="ds-fold-detail-body">${buildDetailBody(parsedCall || { op }, rawCall)}</div></div>`;
+                const rawPre = detail.querySelector('.ds-raw-xml');
+                if (rawPre) rawPre.textContent = rawCall;
 
                 row.addEventListener('click', () => {
-                    const open = detail.style.display === 'block';
-                    detail.style.display = open ? 'none' : 'block';
-                    const arrow = row.querySelector('.ds-fold-arrow');
-                    if (status === 'success' || status === 'error') {
-                        // 保持状态图标不旋转
-                    } else {
-                        arrow.style.transform = open ? '' : 'rotate(90deg)';
-                    }
+                    item.classList.toggle('open');
                 });
 
                 item.appendChild(row);
@@ -617,8 +712,57 @@ ${getPluginsPrompt()}
         });
     }
 
+    // ===== 工具参数可视化 + 插件自定义渲染 =====
+    // 插件可注册：W.DS_ToolRenderers['edit'] = (call) => '<div>自定义HTML</div>'  (返回 null 则用默认)
+    W.DS_ToolRenderers = W.DS_ToolRenderers || {};
+    const PARAM_KEYS = ['path','from','to','pattern','command','url','method','question','line','mode','timeout','find','replace','old','new','content','headers','text','actions','plugin_name','plugin_js'];
+    const PARAM_LABELS = { path:'路径', from:'源', to:'目标', pattern:'匹配', command:'命令', url:'URL', method:'方法', question:'问题', line:'行号', mode:'模式', timeout:'超时', find:'查找', replace:'替换', old:'原内容', new:'新内容', content:'内容', headers:'请求头', text:'文本', actions:'批量操作', plugin_name:'插件名', plugin_js:'插件代码' };
+    function clipVal(s, n) {
+        s = String(s == null ? '' : s);
+        const oneLine = s.length > 300 ? s.slice(0, 300) + ' …(' + s.length + '字)' : s;
+        return oneLine;
+    }
+    function renderParamList(call) {
+        const rows = [];
+        for (const k of PARAM_KEYS) {
+            if (call[k] === undefined || call[k] === null || call[k] === '') continue;
+            rows.push({ k, label: PARAM_LABELS[k] || k, v: clipVal(call[k]) });
+        }
+        // extraArgs（自定义标签）
+        const ex = call.extraArgs || {};
+        for (const k of Object.keys(ex)) {
+            if (ex[k] === undefined || ex[k] === null || ex[k] === '') continue;
+            rows.push({ k: 'ex:' + k, label: k, v: clipVal(ex[k]) });
+        }
+        if (!rows.length) return '';
+        let html = '<div class="ds-param-list">';
+        for (const r of rows) {
+            html += '<div class="ds-param-row"><span class="ds-param-key">' + esc(r.label) + '</span><span class="ds-param-val">' + esc(r.v) + '</span></div>';
+        }
+        html += '</div>';
+        return html;
+    }
+    function buildDetailBody(call, rawXml) {
+        // 插件自定义渲染优先
+        try {
+            const opName = String(call.op || '').toLowerCase();
+            const renderer = W.DS_ToolRenderers[opName];
+            if (typeof renderer === 'function') {
+                const custom = renderer(call);
+                if (custom != null && custom !== '') {
+                    return '<div class="ds-custom-render">' + custom + '</div>';
+                }
+            }
+        } catch (e) { log('插件渲染异常: ' + e.message); }
+        const params = renderParamList(call);
+        let html = params;
+        if (rawXml) {
+            html += '<details class="ds-raw-details"><summary>原始 XML</summary><pre class="ds-raw-xml"></pre></details>';
+        }
+        return html || '<div class="ds-param-empty">（无参数）</div>';
+    }
+
     function foldAllToolcalls() {
-        if (!isModeOn) return;
         pickAll(SEL.virtualItem).forEach(item => {
             if (!pick(SEL.assistantContent, item)) return;
             try { foldToolcalls(item); } catch {}
@@ -630,7 +774,7 @@ ${getPluginsPrompt()}
         pickAll(SEL.userMsg).forEach(el => {
             if (el.getAttribute('data-ds-hidden') === 'true') return;
             const text = el.innerText || '';
-            if (text.trim().startsWith('【系统执行结果】\n') || text.trim().startsWith('【系统提示：本地互联模式已开启')) {
+            if (text.trim().startsWith('【系统执行结果】\n')) {
                 el.setAttribute('data-ds-hidden', 'true');
                 const parent = el.parentElement;
                 if (!parent || parent.querySelector('.ds-user-tool-card')) return;
@@ -660,15 +804,15 @@ ${getPluginsPrompt()}
                     if (status === '失败') { icon = I.close; color = '#d32f2f'; }
                     else if (status === '取消') { icon = I.circle; color = '#888'; }
 
-                    row.innerHTML = `<span class="ds-fold-arrow" style="color:${color}">${icon}</span><span class="ds-fold-label"><b style="color:${color}">[${status}]</b> ${esc(opName)} · ${esc(pathInfo || '无路径')}</span>`;
+                    row.innerHTML = `<span class="ds-fold-status" style="color:${color}">${icon}</span><span class="ds-fold-label"><b style="color:${color}">[${status}]</b> ${esc(opName)} · ${esc(pathInfo || '无路径')}</span><span class="ds-fold-chevron">${I.chevron}</span>`;
 
                     const detail = document.createElement('div');
                     detail.className = 'ds-fold-detail';
-                    detail.textContent = content;
+                    detail.innerHTML = `<div class="ds-fold-detail-inner"><div class="ds-fold-detail-body"></div></div>`;
+                    detail.querySelector('.ds-fold-detail-body').textContent = content;
 
                     row.addEventListener('click', () => {
-                        const open = detail.style.display === 'block';
-                        detail.style.display = open ? 'none' : 'block';
+                        item.classList.toggle('open');
                     });
 
                     item.appendChild(row);
@@ -683,13 +827,13 @@ ${getPluginsPrompt()}
                     item.className = 'ds-fold-item';
                     const row = document.createElement('div');
                     row.className = 'ds-fold-row';
-                    row.innerHTML = `<span class="ds-fold-arrow" style="color:#888">${I.circle}</span><span class="ds-fold-label"><b>${text.startsWith('【系统提示') ? '系统初始化' : '工具结果已返回'}</b></span>`;
+                    row.innerHTML = `<span class="ds-fold-status" style="color:#888">${I.circle}</span><span class="ds-fold-label"><b>工具结果已返回</b></span><span class="ds-fold-chevron">${I.chevron}</span>`;
                     const detail = document.createElement('div');
                     detail.className = 'ds-fold-detail';
-                    detail.textContent = text;
+                    detail.innerHTML = `<div class="ds-fold-detail-inner"><div class="ds-fold-detail-body"></div></div>`;
+                    detail.querySelector('.ds-fold-detail-body').textContent = text;
                     row.addEventListener('click', () => {
-                        const open = detail.style.display === 'block';
-                        detail.style.display = open ? 'none' : 'block';
+                        item.classList.toggle('open');
                     });
                     item.appendChild(row);
                     item.appendChild(detail);
@@ -727,11 +871,14 @@ ${getPluginsPrompt()}
             while ((mm = re.exec(om[1])) !== null) options.push(mm[1].trim());
         }
         // 提取所有自定义标签存入 extraArgs（排除已知的核心标签）
-        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js', 'cwd', 'ms', 'pid']);
+        const knownTags = new Set(['op', 'path', 'reason', 'content', 'old', 'new', 'pattern', 'command', 'question', 'url', 'from', 'to', 'find', 'replace', 'line', 'mode', 'timeout', 'path1', 'path2', 'method', 'headers', 'text', 'options', 'option', 'plugin_name', 'plugin_js', 'cwd', 'ms', 'pid', 'paths']);
         const extraArgs = {};
+        // 剥离最外层 toolcall 包裹（按位置切割，避免外层标签被当成名为 toolcall 的自定义标签、吞掉内部所有参数）
+        let innerXml = String(tcStr).replace(/^\s*<[^>]*>/, '');
+        innerXml = innerXml.replace(/<[^>]*>\s*$/, '');
         const tagRegex = /<([a-zA-Z0-9_]+)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
         let match;
-        while ((match = tagRegex.exec(tcStr)) !== null) {
+        while ((match = tagRegex.exec(innerXml)) !== null) {
             const tag = match[1].toLowerCase();
             if (!knownTags.has(tag)) {
                 let val = match[2].trim();
@@ -754,6 +901,7 @@ ${getPluginsPrompt()}
             headers: extractTag(tcStr, 'headers'), text: extractTag(tcStr, 'text'), options,
             plugin_name: extractTag(tcStr, 'plugin_name'), plugin_js: extractTag(tcStr, 'plugin_js'),
             cwd: extractTag(tcStr, 'cwd'), ms: extractTag(tcStr, 'ms'), pid: extractTag(tcStr, 'pid'),
+            paths: extractTag(tcStr, 'paths'),
             extraArgs
         };
     }
@@ -796,15 +944,32 @@ ${getPluginsPrompt()}
     }
     function parseToolcalls(container) {
         const clone = container.cloneNode(true);
-        clone.querySelectorAll('.ds-think-content').forEach(el => el.remove());
-        clone.querySelectorAll('.ds-fold-list').forEach(el => el.remove()); // 移除新加的折叠 DOM 防干扰
+        clone.querySelectorAll('.ds-fold-list').forEach(el => el.remove()); // 移除我们注入的折叠 DOM，防止重复解析已折叠的签名
+        clone.querySelectorAll('.ds-think-content').forEach(el => el.remove()); // 兜底：dark 主题用这个类名标记思考区
+        // 白名单收敛：只保留正文容器 .ds-assistant-message-main-content，思考区是它的兄弟节点会被自然排除。
+        // 关键：思考区类名随主题变化（dark 有 .ds-think-content，light 可能没有），单靠类名删除不可靠，
+        //       所以改为“只认正文容器”，避免思考过程里的 toolcall 被误当正文执行。
+        try {
+            const MAIN_SEL = '.ds-assistant-message-main-content';
+            const mains = clone.querySelectorAll(MAIN_SEL);
+            if (mains.length) {
+                const holder = document.createElement('div');
+                mains.forEach(m => holder.appendChild(m.cloneNode(true)));
+                clone.innerHTML = '';
+                clone.appendChild(holder);
+            } else {
+                // 老版本 DOM 没有正文容器时的兜底：删除疑似思考区节点
+                clone.querySelectorAll('[class*="think"], [class*="reason"], [class*="thought"]').forEach(el => el.remove());
+            }
+        } catch (e) { log('正文白名单收敛异常: ' + ((e && e.message) || e)); }
+        const TC_OPEN = '<'+'toolcall'+'>';
         const rawTexts = [];
         const invalidTexts = [];
-        
-        // 只提取 pre 标签内的文本
+
+        // 1) 代码块中的 toolcall：合法
         clone.querySelectorAll('pre').forEach(pre => {
             const rawText = pre.textContent;
-            if (!rawText.includes('<toolcall>')) return;
+            if (!rawText.includes(TC_OPEN)) return;
 
             // 已被 foldToolcalls 处理过的 pre（带 data-ds-folded）说明原本就是合法代码块，
             // 直接当合法处理，避免误判为裸 XML
@@ -817,6 +982,31 @@ ${getPluginsPrompt()}
                 invalidTexts.push(rawText);
             }
         });
+
+        // 2) 扫描散落在正文（非 pre / 非行内 code）的裸 XML
+        //    启发式：块内必须同时含 op 开闭标签，避免把正文里讨论格式的文字误判为调用
+        try {
+            const loose = [];
+            const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null);
+            let tn;
+            while ((tn = walker.nextNode())) {
+                const val = tn.nodeValue;
+                if (!val || val.indexOf(TC_OPEN) === -1) continue;
+                const pe = tn.parentElement;
+                if (!pe) continue;
+                if (pe.closest('pre')) continue;   // 已在第 1 步处理
+                if (pe.closest('code')) continue;  // 行内代码视为示例
+                loose.push(val);
+            }
+            if (loose.length) {
+                const joined = loose.join('\n');
+                const opOpen = '<'+'op'+'>', opClose = '<'+'/op'+'>';
+                for (const c of matchToolcalls(joined)) {
+                    const low = c.toLowerCase();
+                    if (low.indexOf(opOpen) !== -1 && low.indexOf(opClose) !== -1) invalidTexts.push(c);
+                }
+            }
+        } catch (e) { log('裸XML文本扫描异常: ' + ((e && e.message) || e)); }
 
         const calls = [];
         for (const rawText of rawTexts) {
@@ -894,27 +1084,52 @@ ${getPluginsPrompt()}
     }
 
     // 所有文件操作统一转发到后端 /fs（后端工作区 = 服务启动目录）
+    let currentForce = false; // 当前工具调用是否强制允许危险路径
+    const FS_READONLY_OPS = new Set(['listdir','openfile','read','stat','diff','hash','grep','glob','tree','search','readb64']);
     async function fsCall(op, args) {
-        try {
-            const resp = await agentFetch('/fs', Object.assign({ op }, args || {}), 60000);
-            if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
-            return await resp.json();
-        } catch (e) {
-            return { ok: false, error: e.message || String(e) };
+        const payload = Object.assign({ op, force: currentForce }, args || {});
+        const canRetry = FS_READONLY_OPS.has(op);
+        const maxTry = canRetry ? 3 : 1;
+        let lastErr = '';
+        for (let attempt = 0; attempt < maxTry; attempt++) {
+            try {
+                const resp = await agentFetch('/fs', payload, 60000);
+                if (!resp.ok) {
+                    lastErr = `HTTP ${resp.status}`;
+                    if (canRetry && (resp.status >= 500 || resp.status === 429) && attempt < maxTry - 1) {
+                        await sleep(500 * (attempt + 1));
+                        continue;
+                    }
+                    return { ok: false, error: lastErr };
+                }
+                return await resp.json();
+            } catch (e) {
+                lastErr = e.message || String(e);
+                if (canRetry && attempt < maxTry - 1) {
+                    log(`fsCall ${op} 失败（${lastErr}），重试 ${attempt + 1}/${maxTry - 1}...`);
+                    await sleep(500 * (attempt + 1));
+                    continue;
+                }
+                return { ok: false, error: lastErr };
+            }
         }
+        return { ok: false, error: lastErr };
     }
 
     // ================== 工具实现 ==================
     async function toolListdir(call) {
         const p = call.path || '.';
-        const r = await fsCall('listdir', { path: p });
+        const tree = /^(true|1|yes)$/i.test(String(call.extraArgs?.tree || '').trim());
+        const r = await fsCall('listdir', { path: p, tree });
         if (!r.ok) throw new ToolError('列出目录', r.error, '请确认目录存在，可先 listdir "." 查看根目录');
-        return `目录 ${p}:\n${r.result}`;
+        return r.result;
     }
 
     async function toolOpenfile(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '请在 <path> 中提供文件路径');
-        const r = await fsCall('openfile', { path: call.path });
+        const offset = call.extraArgs?.offset;
+        const limit = call.extraArgs?.limit;
+        const r = await fsCall('openfile', { path: call.path, offset, limit });
         if (!r.ok) throw new ToolError('读取文件', r.error, '请先 listdir 确认文件存在');
         return r.result;
     }
@@ -950,6 +1165,86 @@ ${getPluginsPrompt()}
         const r = await fsCall('glob', { pattern: call.pattern });
         if (!r.ok) throw new ToolError('文件名匹配', r.error, '');
         return `glob "${call.pattern}":\n${r.result}`;
+    }
+
+    function readExtra(call, name) {
+        const ex = call.extraArgs || {};
+        const v = ex[name] != null ? ex[name] : ex[name.toLowerCase()];
+        return v == null ? '' : String(v).trim();
+    }
+
+    async function toolSearch(call) {
+        const kw = call.pattern || call.keyword;
+        if (!kw) throw new ToolError('参数校验', '缺少 pattern（搜索关键词或正则）', '例如 <pattern>useState</pattern>');
+        const regex = /^(true|1|yes)$/i.test(readExtra(call, 'regex'));
+        const name = readExtra(call, 'name');
+        const context = readExtra(call, 'context');
+        const limit = readExtra(call, 'limit');
+        const r = await fsCall('search', {
+            pattern: kw, path: call.path || '.',
+            regex, name: name || undefined, context: context || undefined, limit: limit || undefined
+        });
+        if (!r.ok) throw new ToolError('全文检索', r.error, '检查正则语法；目录不存在可先 tree/listdir');
+        return r.result;
+    }
+
+    async function toolTree(call) {
+        const depth = readExtra(call, 'depth');
+        const filter = readExtra(call, 'filter');
+        const r = await fsCall('tree', { path: call.path || '.', depth: depth || undefined, filter: filter || undefined });
+        if (!r.ok) throw new ToolError('目录树', r.error, '请确认目录存在');
+        return r.result;
+    }
+
+    async function toolBackups(call) {
+        const limit = readExtra(call, 'limit');
+        const r = await fsCall('backups', { path: call.path || '.', limit: limit || undefined });
+        if (!r.ok) throw new ToolError('列出备份', r.error, '');
+        return r.result;
+    }
+
+    async function toolAudit(call) {
+        const filter = readExtra(call, 'filter');
+        const limit = readExtra(call, 'limit');
+        const r = await fsCall('audit', { filter: filter || undefined, limit: limit || undefined });
+        if (!r.ok) throw new ToolError('查看审计日志', r.error, '检查 filter 正则语法');
+        return r.result;
+    }
+
+    async function toolCleanbaks(call, reason) {
+        const keepDays = readExtra(call, 'keepDays') || readExtra(call, 'keepdays');
+        const keepLatest = readExtra(call, 'keepLatest') || readExtra(call, 'keeplatest');
+        if (!keepDays && !keepLatest) throw new ToolError('参数校验', '需提供 keepDays 或 keepLatest', '如 <keepDays>7</keepDays> 或 <keepLatest>1</keepLatest>');
+        if (!autoMode) {
+            if (!await showConfirmDialog('清理旧备份', call.path || '.', reason,
+                `<div style="font-size:12px;color:#ffb74d;">${keepDays ? '删除 ' + keepDays + ' 天前的备份' : ''} ${keepLatest ? '每个文件只保留最近 ' + keepLatest + ' 个备份' : ''}</div>`))
+                throw new ToolError('用户确认', '用户取消了备份清理', '');
+        }
+        const r = await fsCall('cleanbaks', { path: call.path || '.', keepDays: keepDays || undefined, keepLatest: keepLatest || undefined });
+        if (!r.ok) throw new ToolError('清理备份', r.error, '');
+        return r.result;
+    }
+
+    async function toolBatch(call, reason) {
+        const raw = readExtra(call, 'actions') || call.content;
+        if (!raw) throw new ToolError('参数校验', '缺少 actions（JSON 数组）', '格式：[{"op":"copy","from":"a","to":"b"},...]');
+        let actions;
+        try { actions = JSON.parse(raw); } catch (e) { throw new ToolError('参数校验', 'actions 不是合法 JSON: ' + e.message, '注意必须是 JSON 数组，字符串用双引号'); }
+        if (!Array.isArray(actions) || !actions.length) throw new ToolError('参数校验', 'actions 必须是非空数组', '');
+        if (actions.length > 50) throw new ToolError('参数校验', '单次最多 50 个操作', '请拆成多次 batch');
+
+        if (!autoMode) {
+            const listHtml = actions.map((a, i) =>
+                `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><b style="color:#3964fe">${i + 1}. ${esc(a.op || '?')}</b> ${esc(a.path || (a.from ? a.from + ' → ' + a.to : ''))}</div>`
+            ).join('');
+            if (!await showConfirmDialog('批量操作', actions.length + ' 个操作', reason,
+                `<div style="max-height:220px;overflow:auto;background:#000;padding:8px;border-radius:6px;">${listHtml}</div>`))
+                throw new ToolError('用户确认', '用户取消了批量操作', '');
+        }
+
+        const r = await fsCall('batch', { actions });
+        if (!r.ok) throw new ToolError('批量操作', r.error, '检查各子操作的路径与参数');
+        return r.result;
     }
 
     async function toolWritefile(call, reason) {
@@ -1071,13 +1366,8 @@ ${getPluginsPrompt()}
         return r.result;
     }
 
-    async function toolExec(call, reason, silent = true) {
+    async function toolExec(call, reason) {
         if (!call.command) throw new ToolError('参数校验', '缺少 command', '');
-        if (!silent && !autoMode) {
-            const res = await showCmdDialog(call.command, reason);
-            if (res.cancel) throw new ToolError('用户确认', '用户取消了命令执行', '');
-            return `输出:\n\`\`\`\n${res.output || '(无输出)'}\n\`\`\``;
-        }
 
         const cwd = call.cwd || absPath;
         const timeout = call.timeout ? parseInt(call.timeout, 10) : 30000;
@@ -1134,6 +1424,17 @@ ${getPluginsPrompt()}
         return r.result;
     }
 
+    async function toolRestore(call, reason) {
+        if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
+        if (!autoMode) {
+            if (!await showConfirmDialog('从备份恢复', call.path, reason))
+                throw new ToolError('用户确认', '用户取消了恢复', '');
+        }
+        const r = await fsCall('restore', { path: call.path });
+        if (!r.ok) throw new ToolError('恢复备份', r.error, '请确认该文件存在 .bak 备份');
+        return r.result;
+    }
+
     async function toolWaitFile(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
         const timeout = call.timeout ? parseInt(call.timeout, 10) : 30000;
@@ -1155,7 +1456,7 @@ ${getPluginsPrompt()}
     }
 
     async function toolPreview(call, msgEl) {
-        if (!call.path) throw new ToolError('参数校验', '�����少 path', '');
+        if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
         const rd = await fsCall('read', { path: call.path });
         if (!rd.ok) throw new ToolError('检查路径', `文件不存在: ${call.path}`, rd.error);
         const c = rd.result;
@@ -1193,6 +1494,100 @@ ${getPluginsPrompt()}
         return `图片已展示: ${call.path}`;
     }
 
+    // ===== 往输入框拖入文件（模拟 DataTransfer + drop 事件）=====
+    async function fetchFileAsFile(relPath) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 120000);
+        try {
+            const headers = { 'Content-Type': 'application/json' };
+            if (agentToken) headers['X-Agent-Token'] = agentToken;
+            const resp = await fetch('http://127.0.0.1:39999/download', {
+                method: 'POST', headers, body: JSON.stringify({ path: relPath }), signal: ctrl.signal,
+            });
+            if (!resp.ok) {
+                let msg = 'HTTP ' + resp.status;
+                try { const j = await resp.json(); msg = j.error || msg; } catch {}
+                throw new Error(msg);
+            }
+            const blob = await resp.blob();
+            const name = relPath.split(/[\\/]/).pop();
+            return new File([blob], name, { type: blob.type || 'application/octet-stream', lastModified: Date.now() });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    function findDropZone() {
+        const ta = pick(SEL.textarea);
+        if (!ta) return null;
+        // 优先找到真正监听 drop 的上层容器；逐级向上找带 class 的包裹层
+        let node = ta;
+        for (let i = 0; i < 6 && node; i++) {
+            if (node.getAttribute && (node.getAttribute('role') === 'textbox' || node.className)) {
+                // 停在输入区大容器
+                const par = node.parentElement;
+                if (par) node = par;
+            }
+            node = node ? node.parentElement : null;
+        }
+        return ta.closest('div[class]') || ta.parentElement || ta;
+    }
+
+    function dispatchDropFiles(zone, files) {
+        const dt = new DataTransfer();
+        for (const f of files) dt.items.add(f);
+        const baseOpt = { bubbles: true, cancelable: true, composed: true, dataTransfer: dt };
+        const evs = ['dragenter', 'dragover', 'drop'];
+        for (const t of evs) {
+            try {
+                const ev = new DragEvent(t, baseOpt);
+                // 某些属性在 DragEvent 构造里不一定能设，兜底 defineProperty
+                Object.defineProperty(ev, 'dataTransfer', { value: dt, writable: false });
+                zone.dispatchEvent(ev);
+            } catch (e) {
+                // 退化为普通 Event 手动挂 dataTransfer
+                const ev = new Event(t, { bubbles: true, cancelable: true });
+                try { Object.defineProperty(ev, 'dataTransfer', { value: dt }); } catch {}
+                zone.dispatchEvent(ev);
+            }
+        }
+    }
+
+    async function toolAttach(call) {
+        const pathsRaw = call.paths || call.path || readExtra(call, 'paths') || '';
+        if (!pathsRaw) throw new ToolError('参数校验', '缺少 path/paths', '可填多个，用逗号分隔，如 <paths>a.png,b.pdf</paths>');
+        const list = String(pathsRaw).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+        if (!list.length) throw new ToolError('参数校验', '路径为空', '');
+
+        const files = [];
+        for (const p of list) {
+            try {
+                const f = await fetchFileAsFile(p);
+                files.push(f);
+            } catch (e) {
+                throw new ToolError('读取文件', p + ': ' + e.message, '确认文件在工作区内且小于 200MB；server 需重启以启用 /download');
+            }
+        }
+
+        const zone = findDropZone();
+        if (!zone) throw new ToolError('定位输入框', '找不到聊天输入区', '页面可能未就绪，稍后重试');
+
+        dispatchDropFiles(zone, files);
+        await sleep(400);
+
+        const totalKB = files.reduce((s, f) => s + f.size, 0) / 1024;
+        return '已向输入框拖入 ' + files.length + ' 个文件（共 ' + totalKB.toFixed(1) + 'KB）：\n' +
+            files.map(f => '- ' + f.name + ' (' + f.type + ', ' + (f.size/1024).toFixed(1) + 'KB)').join('\n') +
+            '\n请检查输入框是否已出现文件附件，确认无误后可再调用 send_message 或手动发送。';
+    }
+
+    async function toolSendMessage(call) {
+        const text = call.content != null ? String(call.content) : (call.text != null ? String(call.text) : '');
+        const r = await sendMessage(text, 15000);
+        if (!r.ok) throw new ToolError('发送消息', r.reason || '发送失败', '确认输入框就绪、发送按钮可用');
+        return '消息已发送（' + text.length + ' 字符）' + (text ? '' : '（仅附件，无文字）');
+    }
+
     async function toolFetch(call) {
         if (!call.url) throw new ToolError('参数校验', '缺少 url', '');
         try { new URL(call.url); } catch { throw new ToolError('参数校验', `URL 无效: ${call.url}`, '需以 http:// 或 https:// 开头'); }
@@ -1204,14 +1599,19 @@ ${getPluginsPrompt()}
 
         try {
             const resp = await agentFetch('/fetch', {
-                url: call.url, method: call.method, content: call.content, headers: headersObj
+                url: call.url, method: call.method, content: call.content, headers: headersObj,
+                saveTo: call.extraArgs?.saveto || call.extraArgs?.saveTo
             }, 40000);
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({}));
                 throw new ToolError('本地服务', err.error || `HTTP ${resp.status}`, err.hint || '检查本地服务是否运行、目标是否可达');
             }
             const data = await resp.json();
+            if (data.error) throw new ToolError('本地服务', data.error, '检查 saveTo 路径是否在工作区内');
             const t = data.text || '';
+            if (data.savedPath) {
+                return `HTTP ${call.method} ${call.url}\n状态: ${data.status} ${data.statusText}\n已保存到文件: ${data.savedPath}（${data.bytes} 字节）\n正文预览:\n\`\`\`\n${t.slice(0, 2000)}\n\`\`\`${t.length > 2000 ? `\n...(已截断，共 ${t.length} 字符，完整内容见文件)` : ''}`;
+            }
             return `HTTP ${call.method} ${call.url}\n状态: ${data.status} ${data.statusText}\n内容:\n\`\`\`\n${t.slice(0, 5000)}\n\`\`\`${t.length > 5000 ? `\n...(已截断，共 ${t.length} 字符)` : ''}`;
         } catch (e) {
             if (e instanceof ToolError) throw e;
@@ -1239,37 +1639,6 @@ ${getPluginsPrompt()}
         return `已复制 ${call.text.length} 字符到剪贴板`;
     }
 
-    async function toolChmod(call) {
-        if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
-        if (!call.mode) throw new ToolError('参数校验', '缺少 mode', '类 Unix：755/644/+x；Windows：+R/-R');
-        const st = await fsCall('stat', { path: call.path });
-        if (!st.ok) throw new ToolError('检查路径', `路径不存在: ${call.path}`, st.error);
-
-        const winPath = String(call.path).replace(/\//g, '\\');
-
-        const isAttribStyle = /^[+-][RASH]$/i.test(String(call.mode).trim());
-        const primaryCmd   = isAttribStyle ? `attrib ${call.mode.toUpperCase()} "${winPath}"` : `chmod ${call.mode} "${call.path}"`;
-        const fallbackCmd  = isAttribStyle ? `chmod ${call.mode} "${call.path}"`               : `attrib +R "${winPath}"`;
-
-        const run = async (cmd) => {
-            const resp = await agentFetch('/exec', { command: cmd, timeout: 10000 }, 15000);
-            const data = await resp.json();
-            return data;
-        };
-
-        try {
-            let data = await run(primaryCmd);
-            if (data.exitCode === 0) return `已设置权限: ${call.mode} → ${call.path}`;
-            data = await run(fallbackCmd);
-            if (data.exitCode === 0) return `已设置权限: ${call.mode} → ${call.path}（备选方式）`;
-            throw new ToolError('执行 chmod', `命令均失败: ${data.output || '(无输出)'}`,
-                '类 Unix 用 chmod 755/644/+x；Windows 用 attrib +R/-R 或 icacls');
-        } catch (e) {
-            if (e instanceof ToolError) throw e;
-            throw stepErr('调用本地服务', e, '请确认本地服务已启动、token 正确、absPath 有效');
-        }
-    }
-
     async function toolRegisterPlugin(call) {
         const name = call.plugin_name || (call.extraArgs && call.extraArgs.plugin_name);
         const jsCode = call.plugin_js || (call.extraArgs && call.extraArgs.plugin_js);
@@ -1293,15 +1662,64 @@ ${getPluginsPrompt()}
             pluginObj.name = pluginName;
             if (!pluginObj.description) pluginObj.description = 'AI 动态生成的插件';
 
-            // 避免重复注册
+            // 避免重复注册（覆盖时先清理旧的 UI 挂载）
             const existingIdx = W.DS_Agent_Plugins.findIndex(p => p.name === pluginName);
             if (existingIdx >= 0) {
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_btn'); } catch {}
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
+                try { delete W.DS_ToolRenderers[pluginName]; } catch {}
                 W.DS_Agent_Plugins[existingIdx] = pluginObj;
-                return `插件 "${pluginName}" 已更新成功。请直接在当前对话的下一轮调用该插件。`;
             } else {
                 W.DS_Agent_Plugins.push(pluginObj);
-                return `插件 "${pluginName}" 注册成功！请直接在当前对话的下一轮调用该插件。`;
             }
+
+            // ===== 处理插件自带的 UI 挂载 =====
+            const uiInfo = [];
+            const ui = pluginObj.ui;
+            if (ui && typeof ui === 'object') {
+                // 1. 工具栏按钮
+                if (Array.isArray(ui.toolbar)) {
+                    ui.toolbar.forEach((cfg, idx) => {
+                        if (!cfg || typeof cfg.onClick !== 'function') return;
+                        const btnId = 'plg_' + pluginName + '_btn' + (idx ? idx : '');
+                        W.DS_UI_Slots.addButton({
+                            id: btnId,
+                            label: cfg.label || pluginName,
+                            icon: cfg.icon || '',
+                            title: cfg.title || '',
+                            slot: 'toolbar',
+                            onClick: (btnEl) => cfg.onClick(btnEl, pluginObj),
+                        });
+                        uiInfo.push('工具栏按钮「' + (cfg.label || pluginName) + '」');
+                    });
+                }
+                // 2. 开关
+                if (Array.isArray(ui.toggle)) {
+                    ui.toggle.forEach((cfg, idx) => {
+                        if (!cfg || typeof cfg.onChange !== 'function') return;
+                        const tgId = 'plg_' + pluginName + '_tg' + (idx ? idx : '');
+                        W.DS_UI_Slots.addToggle({
+                            id: tgId,
+                            label: cfg.label || pluginName,
+                            defaultOn: !!cfg.defaultOn,
+                            slot: 'toggle',
+                            onChange: (state) => cfg.onChange(state, pluginObj),
+                        });
+                        uiInfo.push('开关「' + (cfg.label || pluginName) + '」');
+                    });
+                }
+                // 3. 工具折叠详情自定义渲染
+                if (typeof ui.renderTool === 'function') {
+                    W.DS_ToolRenderers[pluginName] = (call) => {
+                        try { return ui.renderTool(call, pluginObj); } catch (e) { return '<div style="color:#f25a5a">渲染出错: ' + esc(e.message) + '</div>'; }
+                    };
+                    uiInfo.push('工具详情自定义渲染');
+                }
+            }
+
+            const uiSuffix = uiInfo.length ? ('\n已挂载 UI：' + uiInfo.join('、')) : '';
+            return (existingIdx >= 0 ? `插件 "${pluginName}" 已更新成功。` : `插件 "${pluginName}" 注册成功！`) +
+                uiSuffix + '\n请直接在当前对话的下一轮调用该插件。';
 
         } catch (e) {
             throw new ToolError('编译插件', e.message || String(e), '请确保 plugin_js 是合法的 JavaScript 对象字面量');
@@ -1349,6 +1767,14 @@ ${getPluginsPrompt()}
             case 'mkdir': return toolMkdir(call);
             case 'grep': return toolGrep(call);
             case 'glob': return toolGlob(call);
+            case 'search': return toolSearch(call);
+            case 'tree': return toolTree(call);
+            case 'batch': return toolBatch(call, reason);
+            case 'backups': return toolBackups(call);
+            case 'audit': return toolAudit(call);
+            case 'cleanbaks': return toolCleanbaks(call, reason);
+            case 'attach': return toolAttach(call);
+            case 'send_message': return toolSendMessage(call);
             case 'writefile': return toolWritefile(call, reason);
             case 'append': return toolAppend(call, reason);
             case 'edit': return toolEdit(call, reason);
@@ -1360,17 +1786,26 @@ ${getPluginsPrompt()}
             case 'stat': return toolStat(call);
             case 'diff': return toolDiff(call);
             case 'hash': return toolHash(call);
+            case 'readb64': {
+                if (!call.path) throw new ToolError('参数校验', '缺少 path', '');
+                const r = await fsCall('readb64', { path: call.path });
+                if (!r.ok) throw new ToolError('读取文件', r.error, '请确认文件存在且为图片');
+                const url = String(r.result || '');
+                // 防止超大 base64 撑爆上下文：超过 60KB 只回报摘要，展示请用 image 工具
+                if (url.length > 60000) {
+                    return `文件 ${call.path} 的 data URL 过大（${url.length} 字符），已省略。如需在页面展示请改用 image 工具。\n前缀: ${url.slice(0, 80)}...`;
+                }
+                return url;
+            }
             case 'waitfile': return toolWaitFile(call);
             case 'ask': return toolAsk(call, reason);
-            case 'exec': return toolExec(call, reason, true);
-            case 'autocmd': return toolExec(call, reason, true);
-            case 'runcmd': return toolExec(call, reason, false);
+            case 'exec': return toolExec(call, reason);
             case 'preview': return toolPreview(call, msgEl);
             case 'openurl': return toolOpenurl(call);
             case 'image': return toolImage(call, msgEl);
             case 'fetch': return toolFetch(call);
+            case 'restore': return toolRestore(call, reason);
             case 'clipboard': return toolClipboard(call);
-            case 'chmod': return toolChmod(call);
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
             case 'register_plugin': return toolRegisterPlugin(call);
@@ -1411,6 +1846,7 @@ ${getPluginsPrompt()}
     async function executeOne(call, msgEl) {
         const op = String(call.op || '').toLowerCase();
         const sig = toolcallSignature(call);
+        currentForce = /^(true|1|yes)$/i.test(readExtra(call, 'force'));
         toolcallStatusMap.set(sig, 'running');
         updateFoldUI();
         try {
@@ -1441,12 +1877,12 @@ ${getPluginsPrompt()}
             else if (status === 'success') { icon = I.check; color = '#4CAF50'; }
             else if (status === 'error') { icon = I.close; color = '#d32f2f'; }
 
-            const arrowSpan = item.querySelector('.ds-fold-arrow');
-            if (arrowSpan) {
-                if (!arrowSpan.getAttribute('data-state') || arrowSpan.getAttribute('data-state') !== status) {
-                    arrowSpan.innerHTML = icon;
-                    arrowSpan.style.color = color;
-                    arrowSpan.setAttribute('data-state', status);
+            const statusSpan = item.querySelector('.ds-fold-status');
+            if (statusSpan) {
+                if (!statusSpan.getAttribute('data-state') || statusSpan.getAttribute('data-state') !== status) {
+                    statusSpan.innerHTML = icon;
+                    statusSpan.style.color = color;
+                    statusSpan.setAttribute('data-state', status);
                 }
             }
         });
@@ -1466,9 +1902,38 @@ ${getPluginsPrompt()}
             interjectQueue.length = 0;
             try { renderInterjectPending(); } catch {}
         }
-        text += "⚠️ 【强制格式警告】系统已开启严格模式：任何没有用 ```toolcall 代码块包裹的裸 XML 都会被直接拒绝执行。";
-        text += "下次调用必须严格使用如下格式（缺代码块 = 失败）：\n```toolcall\n<toolcall>\n  <op>工具名</op>\n  <参数>值</参数>\n</toolcall>\n```";
+        text += [
+            "【每轮必读·格式自查】",
+            "1. 每个工具调用都必须包在三反引号代码块里（开头 ```toolcall，结尾 ```），块内放完整 <toolcall>...</toolcall>。",
+            "2. 代码块外裸写 <toolcall> 会被系统直接拒绝，本轮调用白费。",
+            "3. 发送前自查：你写的每个 <toolcall> 前面是不是都有 ```toolcall 那一行？结尾有没有三个反引号？",
+            "4. 多个调用 = 多个独立的 ```toolcall 代码块，不要塞进同一个块。",
+            "示例（照抄这个结构）：```toolcall / <toolcall> / <op>工具名</op> / <参数>值</参数> / </toolcall> / ```"
+        ].join("\n");
         return text;
+    }
+
+    function showProgress(total) {
+        const wrap = document.getElementById('ds-progress-wrap');
+        if (!wrap) return;
+        wrap.style.display = 'flex';
+        setProgress(0, total, '准备执行');
+    }
+    function setProgress(done, total, text) {
+        const wrap = document.getElementById('ds-progress-wrap');
+        const bar = document.getElementById('ds-progress-bar');
+        const cnt = document.getElementById('ds-progress-count');
+        const txt = document.getElementById('ds-progress-text');
+        if (!wrap) return;
+        if (txt && text) txt.textContent = text;
+        if (cnt) cnt.textContent = done + '/' + total;
+        if (bar) bar.style.width = (total ? Math.round(done / total * 100) : 0) + '%';
+    }
+    function hideProgress() {
+        const wrap = document.getElementById('ds-progress-wrap');
+        if (wrap) { wrap.style.display = 'none'; }
+        const bar = document.getElementById('ds-progress-bar');
+        if (bar) bar.style.width = '0%';
     }
 
     function renderInterjectPending() {
@@ -1476,10 +1941,11 @@ ${getPluginsPrompt()}
         if (!el) return;
         if (interjectQueue.length === 0) {
             el.style.display = 'none';
-            el.textContent = '';
+            el.innerHTML = '';
         } else {
             el.style.display = 'block';
-            el.textContent = '待发送插话 (' + interjectQueue.length + ')：' + interjectQueue.join(' | ');
+            el.innerHTML = '<b>待发送插话 (' + interjectQueue.length + ')</b><br>' +
+                interjectQueue.map((m, i) => (i + 1) + '. ' + esc(m)).join('<br>');
         }
     }
 
@@ -1501,6 +1967,7 @@ ${getPluginsPrompt()}
             if (!pick(SEL.assistantContent, item)) continue;
             const key = item.getAttribute('data-virtual-list-item-key');
             if (!key) continue;
+            if (ignoreKeys.has(key)) continue; // 「当前对话内开始」启动时已存在的消息：不执行其工具调用
             const st = msgStore.get(key);
             if (!st || !st.done) continue;
             const parsed = parseToolcalls(item);
@@ -1509,6 +1976,8 @@ ${getPluginsPrompt()}
                 const sig = '__invalid_format__' + item.getAttribute('data-virtual-list-item-key');
                 if (!st.sigs.has(sig)) {
                     st.sigs.add(sig);
+                    showToast('warning', '检测到裸 XML 工具调用，已拒绝并要求 AI 重发', 5000);
+                    log('⚠ 检测到未包裹代码块的裸 XML，已拦截');
                     toExec.push({ 
                         call: { op: '__format_error__', path: '' }, 
                         st, sig, item,
@@ -1516,7 +1985,7 @@ ${getPluginsPrompt()}
                             op: '__format_error__',
                             path: '',
                             status: 'error',
-                            msg: '[格式错误] 本次调用被拒绝！\n\n你输出了没有用 ```toolcall 代码块包裹的裸 XML。系统强制要求：每一次工具调用，必须把完整的 <toolcall> 包裹在 ```toolcall 代码块中。请修正格式后重发。'
+                            msg: '[格式错误] 本次调用被拒绝！\n\n你输出了未用 ```toolcall 代码块包裹的裸 XML，系统无法执行。\n\n【必须修正】把完整的 <toolcall>...</toolcall> 放在三反引号包裹的代码块中，代码块语言标记写 toolcall，例如：\n\n```toolcall\n<toolcall>\n  <op>listdir</op>\n  <path>.</path>\n</toolcall>\n```\n\n请严格按此格式重新发送你要执行的工具调用。'
                         }
                     });
                 }
@@ -1557,29 +2026,34 @@ ${getPluginsPrompt()}
         dsSetStatus('working', '执行中...');
 
         const results = [];
-        const SLOW_OPS = ['sleep', 'waitfile', 'exec', 'fetch', 'runcmd', 'ask'];
-        for (const entry of toExec) {
+        const SLOW_OPS = ['sleep', 'waitfile', 'exec', 'fetch', 'ask'];
+        // 只读工具可并发执行，提升批次速度（结果仍按原顺序回填）
+        const READONLY_OPS = new Set(['listdir', 'openfile', 'grep', 'glob', 'stat', 'hash', 'diff', 'gettime']);
+
+        const runOne = async (entry) => {
             const call = entry.call;
             const sig = entry.sig;
             const st = entry.st;
-            
+
             if (entry.customResult) {
                 st.sigs.add(sig);
                 log(`→ error: 发现裸 XML 格式错误`);
-                results.push(entry.customResult);
-                continue;
+                return entry.customResult;
             }
 
             toolcallCounter++;
             log(`执行 ${call.op} ${displayFor(call)}`);
             let result;
-            // 需要用户弹窗确认的操作：不限时，等用户点完再继续
-            const NEEDS_CONFIRM = ['runcmd', 'ask'];
+            const NEEDS_CONFIRM = ['ask'];
             const isConfirmOp = NEEDS_CONFIRM.includes(call.op) ||
                 (!autoMode && ['writefile', 'append', 'edit', 'editline', 'replaceall', 'del'].includes(call.op));
             let TOOL_TIMEOUT_MS = 5000;
+            const isServerPlugin = W.serverPlugins && W.serverPlugins.some(p => p.name === call.op);
             if (isConfirmOp) {
-                TOOL_TIMEOUT_MS = 0; // 0 = 不限时
+                TOOL_TIMEOUT_MS = 0;
+            } else if (isServerPlugin) {
+                // 服务端插件（如 TTS、下载大文件等）可能耗时较长，给予 5 分钟超时
+                TOOL_TIMEOUT_MS = 5 * 60 * 1000;
             } else if (SLOW_OPS.includes(call.op)) {
                 const ut = call.timeout ? parseInt(call.timeout, 10) : 0;
                 if (call.op === 'sleep' || call.op === 'waitfile') TOOL_TIMEOUT_MS = (ut || 30000) + 2000;
@@ -1589,7 +2063,6 @@ ${getPluginsPrompt()}
             }
             try {
                 if (TOOL_TIMEOUT_MS === 0) {
-                    // 不限时（弹窗确认类 / 已由 awaitingUser 保护）
                     result = await executeOne(call, entry.item);
                 } else {
                     let _toTimer = null;
@@ -1602,7 +2075,6 @@ ${getPluginsPrompt()}
                         clearTimeout(_toTimer);
                     }
                 }
-                // 写操作后留出 50ms，让底层文件句柄释放，避免紧接的读操作卡死
                 if (['writefile', 'append', 'edit', 'editline', 'replaceall', 'move', 'copy'].includes(call.op)) {
                     await sleep(50);
                 }
@@ -1611,8 +2083,38 @@ ${getPluginsPrompt()}
             }
             st.sigs.add(sig);
             log(`→ ${result.status}: ${String(result.msg).split('\n')[0]}`);
-            results.push(result);
+            return result;
+        };
+
+        let roBatch = [];
+        const flushBatch = async () => {
+            if (!roBatch.length) return;
+            const cur = roBatch; roBatch = [];
+            const rs = await Promise.all(cur.map(e => runOne(e)));
+            for (const r of rs) results.push(r);
+            progressDone += cur.length;
+            setProgress(progressDone, progressTotal, '执行中');
+        };
+
+        let progressDone = 0;
+        const progressTotal = toExec.length;
+        showProgress(progressTotal);
+        setProgress(0, progressTotal, '执行中');
+
+        for (const entry of toExec) {
+            const op = String(entry.call.op || '').toLowerCase();
+            if (!entry.customResult && READONLY_OPS.has(op)) {
+                roBatch.push(entry);
+            } else {
+                await flushBatch();
+                results.push(await runOne(entry));
+                progressDone++;
+                setProgress(progressDone, progressTotal, '执行中');
+            }
         }
+        await flushBatch();
+        setProgress(progressTotal, progressTotal, '执行完成');
+        setTimeout(hideProgress, 1200);
 
         let sent = false, lastReason = '', retryCount = 0;
         const MAX_AUTO_RETRIES = 30; // 最多自动重试 30 次（约 5 分钟），避免死循环
@@ -1653,6 +2155,7 @@ ${getPluginsPrompt()}
             pendingResults = null;
             dsSetStatus('active', '监听中');
         }
+        hideProgress();
 
         isCooldown = true;
         if (cooldownTimer) clearTimeout(cooldownTimer);
@@ -1665,6 +2168,7 @@ ${getPluginsPrompt()}
 
     async function checkAndProcess() {
         if (!isModeOn) return;
+        if (isPaused) return;
         if (isCoolingDown) return;
         if (isProcessing) {
             // 弹窗等待用户期间不强制复位（用户可能还没点确定）
@@ -1726,24 +2230,21 @@ ${getPluginsPrompt()}
         if (pollInterval) clearInterval(pollInterval);
         let rafPending = false;
         observer = new MutationObserver(() => {
-            if (!isModeOn) return;
             hideToolResultMessages();
             if (rafPending) return;
             rafPending = true;
             requestAnimationFrame(() => {
                 rafPending = false;
-                if (!isModeOn) return;
                 scanMessages();
                 foldAllToolcalls();
-                checkAndProcess();
+                if (isModeOn) checkAndProcess();
             });
         });
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
         pollInterval = setInterval(() => {
-            if (!isModeOn) return;
             hideToolResultMessages();
             foldAllToolcalls();
-            checkAndProcess();
+            if (isModeOn) checkAndProcess();
         }, 2000);
     }
 
@@ -1773,18 +2274,21 @@ ${getPluginsPrompt()}
         panel.className = 'ds-panel-container';
         panel.innerHTML = `
             <div style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;font-weight:600;color:var(--dsw-alias-brand-primary,#4CAF50);gap:6px;">
+                <div style="display:flex;align-items:center;font-weight:600;color:var(--dsw-alias-brand-primary,#3964fe);gap:6px;">
                     <span id="ds-dot" class="ds-status-dot"></span>本地互联
                 </div>
-                <span id="ds-status" style="font-size:12px;color:#aaa;">未连接</span>
+                <span id="ds-status" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);">未连接</span>
             </div>
             <div id="ds-setup-container" style="display:flex;flex-direction:column;gap:8px;">
                 <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
                     <span style="font-size:11px;color:#888;line-height:1.4;">工作区目录（AI 将在此目录下操作文件）:</span>
                     <div style="display:flex;gap:6px;align-items:flex-start;">
-                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#4CAF50;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
-                        <button id="ds-pick-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;padding:4px 10px;font-size:11px;">选择目录</button>
+                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#3964fe;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
+                        <button id="ds-pick-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">选择目录</button>
                     </div>
+                    <select id="ds-recent-select" class="ds-input" style="display:none;font-size:11px;margin-top:4px;">
+                        <option value="">— 从最近使用的工作区选择 —</option>
+                    </select>
                     <span style="font-size:11px;color:#888;line-height:1.4;margin-top:4px;">本地服务 Token（server 启动时打印，可选）:</span>
                     <input id="ds-token-input" class="ds-input" type="password" placeholder="留空表示不使用 token" />
                 </div>
@@ -1792,11 +2296,14 @@ ${getPluginsPrompt()}
                     <span style="font-size:11px;color:#888;">本次任务目标:</span>
                     <input id="ds-goal-input" class="ds-input" type="text" placeholder="输入目标（留空则由 AI 自行探索）" />
                     <span style="font-size:11px;color:#888;margin-top:4px;">启动方式:</span>
-                    <label style="font-size:12px;color:#ccc;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <label style="font-size:12px;color:var(--dsw-alias-label-primary,#f9fafb);display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="radio" name="ds-start-mode" value="new" checked> 在新对话开始（推荐）
                     </label>
-                    <label style="font-size:12px;color:#ccc;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <label style="font-size:12px;color:var(--dsw-alias-label-primary,#f9fafb);display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="radio" name="ds-start-mode" value="here"> 在当前对话内开始
+                    </label>
+                    <label id="ds-skip-prompt-label" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;padding-left:20px;">
+                        <input type="checkbox" id="ds-skip-prompt"> 不再发送系统提示词（直接继续监听，仅「当前对话内开始」生效）
                     </label>
                 </div>
                 <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
@@ -1804,16 +2311,28 @@ ${getPluginsPrompt()}
             <div id="ds-main-container" style="display:none;flex-direction:column;gap:8px;">
                 <div style="display:flex;gap:6px;align-items:center;">
                     <input id="ds-interject-input" class="ds-input" type="text" placeholder="插话（AI 执行时也会插队到下次结果）" style="flex:1;font-size:12px;" />
-                    <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;padding:4px 10px;font-size:11px;">插话</button>
+                    <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">插话</button>
                 </div>
-                <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.4;padding:2px 4px;"></div>
-                <label style="font-size:12px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.5;padding:6px 9px;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);border-left:3px solid #eab308;border-radius:6px;"></div>
+                <div id="ds-progress-wrap" style="display:none;flex-direction:column;gap:4px;">
+                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dsw-alias-label-tertiary,#81858c);">
+                        <span id="ds-progress-text">执行中...</span>
+                        <span id="ds-progress-count">0/0</span>
+                    </div>
+                    <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;">
+                        <div id="ds-progress-bar" style="height:100%;width:0%;background:var(--dsw-alias-brand-primary,#3964fe);border-radius:2px;transition:width .25s cubic-bezier(.4,0,.2,1);"></div>
+                    </div>
+                </div>
+                <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
                     <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
                 </label>
-                <label style="font-size:12px;color:#888;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
                     <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却（连续10次后暂停）
                 </label>
-                <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger">断开连接</button>
+                <div style="display:flex;gap:6px;">
+                    <button id="ds-pause-btn" class="ds-btn ds-btn-secondary" style="flex:1;">暂停执行</button>
+                    <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger" style="flex:1;">断开连接</button>
+                </div>
                 <div id="ds-log" class="ds-log-area"></div>
             </div>`;
         newChatBtn.parentNode.insertBefore(panel, newChatBtn.nextSibling);
@@ -1828,6 +2347,8 @@ ${getPluginsPrompt()}
         const goalContainer = $('ds-goal-container'), goalInput = $('ds-goal-input');
         const autoToggle = $('ds-auto-toggle');
         const throttleToggle = $('ds-throttle-toggle');
+        const pauseBtn = $('ds-pause-btn');
+        const recentSelect = $('ds-recent-select');
 
         window.dsLog = (msg) => {
             const d = document.createElement('div');
@@ -1857,8 +2378,51 @@ ${getPluginsPrompt()}
         interjectBtn.addEventListener('click', submitInterject);
         interjectInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitInterject(); });
 
-        autoToggle.addEventListener('change', () => { autoMode = autoToggle.checked; });
-        throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; });
+        autoToggle.addEventListener('change', () => { autoMode = autoToggle.checked; saveState(); });
+        throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; saveState(); });
+
+        pauseBtn.addEventListener('click', () => {
+            isPaused = !isPaused;
+            if (isPaused) {
+                pauseBtn.textContent = '继续执行';
+                dsSetStatus('working', '已暂停');
+                log('⏸ 已暂停自动执行（AI 新生成的工具调用将不被执行，直到继续）');
+                showToast('warning', '已暂停自动执行', 2500);
+            } else {
+                pauseBtn.textContent = '暂停执行';
+                dsSetStatus('active', '监听中');
+                log('▶ 已恢复自动执行');
+                showToast('success', '已恢复自动执行', 2000);
+                checkAndProcess();
+            }
+        });
+
+        function refreshRecentSelect() {
+            const list = loadRecentWorkspaces();
+            if (!list.length) { recentSelect.style.display = 'none'; return; }
+            recentSelect.style.display = 'block';
+            recentSelect.innerHTML = '<option value="">— 从最近使用的工作区选择 —</option>' +
+                list.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+        }
+        recentSelect.addEventListener('change', async () => {
+            const p = recentSelect.value;
+            if (!p) return;
+            try {
+                const resp = await agentFetch('/workspace/set', { path: p }, 10000);
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                const data = await resp.json();
+                if (!data.ok) throw new Error(data.error || '切换失败');
+                absPath = data.cwd;
+                workspacePathEl.textContent = absPath;
+                workspacePathEl.title = absPath;
+                log('已切换工作区: ' + absPath);
+                showToast('success', '工作区已切换', 2000);
+            } catch (e) {
+                log('切换工作区失败: ' + e.message);
+                showToast('error', '切换失败: ' + e.message, 3000);
+            }
+        });
+        refreshRecentSelect();
 
         async function doPickWorkspace() {
             dsSetStatus('working', '请在弹出的窗口中选择');
@@ -1878,6 +2442,8 @@ ${getPluginsPrompt()}
                 absPath = data.cwd;
                 workspacePathEl.textContent = absPath;
                 workspacePathEl.title = absPath;
+                addRecentWorkspace(absPath);
+                refreshRecentSelect();
                 dsSetStatus('working', '目录已选定');
                 log(`工作区: ${absPath}`);
                 return true;
@@ -1961,7 +2527,9 @@ ${getPluginsPrompt()}
                 const startModeEl = document.querySelector('input[name="ds-start-mode"]:checked');
                 const startMode = startModeEl ? startModeEl.value : 'new';
 
-                step = 3; isModeOn = true;
+                step = 3; isModeOn = true; lastGoal = goal;
+                addRecentWorkspace(absPath);
+                saveState();
                 setupContainer.style.display = 'none';
                 mainContainer.style.display = 'flex';
                 dsSetStatus('active', '已连接');
@@ -1971,18 +2539,34 @@ ${getPluginsPrompt()}
         toolcallStatusMap.clear();
                 currentChatUrl = location.href;
 
-                const herePrompt = `现在开始，你可以使用工具了。\n\n【工作区信息】\n绝对路径：${absPath}\n当前目标：${goal}`;
+                const herePrompt = getInitPrompt(absPath, goal);
+                const skipPromptEl = document.getElementById('ds-skip-prompt');
+                const skipPrompt = !!(skipPromptEl && skipPromptEl.checked);
 
                 if (startMode === 'here') {
                     log('启动方式: 当前对话内开始');
-                    setTimeout(async () => {
-                        const r = await sendMessage(herePrompt);
-                        if (!r.ok) log(`启动消息发送失败: ${r.reason}`);
-                        else log('启动消息已发送');
+                    // 快照：启动时页面上已存在的消息，其工具调用一律不再执行（防刷新后重跑历史）
+                    ignoreKeys.clear();
+                    pickAll(SEL.virtualItem).forEach(el => {
+                        const k = el.getAttribute('data-virtual-list-item-key');
+                        if (k) ignoreKeys.add(k);
+                    });
+                    const primed = primeHistoryToolcalls();
+                    if (primed) log(`已跳过当前对话中 ${primed} 个历史工具调用（防止重复执行）`);
+                    if (skipPrompt) {
+                        log('已选择不发送系统提示词，直接在当前对话继续监听');
                         startObserver();
-                    }, 300);
+                    } else {
+                        setTimeout(async () => {
+                            const r = await sendMessage(herePrompt);
+                            if (!r.ok) log(`启动消息发送失败: ${r.reason}`);
+                            else log('启动消息已发送');
+                            startObserver();
+                        }, 300);
+                    }
                 } else {
                     log('启动方式: 新对话开始');
+                    ignoreKeys.clear();
                     const newChatBtnClick = Array.from(document.querySelectorAll('span'))
                         .find(el => el.textContent.trim() === '开启新对话')?.closest('[tabindex="0"]');
                     if (newChatBtnClick) {
@@ -1994,6 +2578,12 @@ ${getPluginsPrompt()}
                         }, 1000);
                     } else {
                         log('未找到新对话按钮，改为在当前对话开始');
+                        ignoreKeys.clear();
+                        pickAll(SEL.virtualItem).forEach(el => {
+                            const k = el.getAttribute('data-virtual-list-item-key');
+                            if (k) ignoreKeys.add(k);
+                        });
+                        primeHistoryToolcalls();
                         setTimeout(async () => {
                             const r = await sendMessage(herePrompt);
                             if (!r.ok) log(`启动消息发送失败: ${r.reason}`);
@@ -2014,6 +2604,7 @@ ${getPluginsPrompt()}
         toolcallStatusMap.clear();
             pendingResults = null;
             interjectQueue.length = 0;
+            ignoreKeys.clear();
             try { renderInterjectPending(); } catch {}
             if (observer) { observer.disconnect(); observer = null; }
             if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
@@ -2027,7 +2618,24 @@ ${getPluginsPrompt()}
             connectBtn.textContent = '开启模式';
             absContainer.style.display = 'none';
             goalContainer.style.display = 'none';
+            isPaused = false;
+            try { localStorage.removeItem(STATE_KEY); } catch {}
         });
+
+        // ===== 状态恢复：刷新后自动填回上次的工作区/Token/开关（不自动连接）=====
+        try {
+            const st = loadState();
+            if (st) {
+                if (st.absPath) { absPath = st.absPath; workspacePathEl.textContent = st.absPath; workspacePathEl.title = st.absPath; }
+                if (st.lastGoal) goalInput.value = st.lastGoal;
+                autoToggle.checked = !!st.autoMode;
+                throttleToggle.checked = st.autoThrottle !== false;
+                autoMode = !!st.autoMode;
+                autoThrottle = st.autoThrottle !== false;
+                log('已恢复上次的配置（工作区/目标/开关），点击"开启模式"继续');
+            }
+            refreshRecentSelect();
+        } catch {}
 
         return true;
     }
@@ -2084,6 +2692,164 @@ ${getPluginsPrompt()}
         toolbar.insertBefore(wrapper, sendWrapper);
     }
 
+    // ===== 插件 UI 挂载系统 =====
+    // 插件可注册按钮/开关，挂在发送工具栏或思考/搜索开关旁
+    // W.DS_UI_Slots.addButton({ id, label, icon, title, onClick, slot: 'toolbar'|'toggle' })
+    // W.DS_UI_Slots.addToggle({ id, label, defaultOn, onChange, slot: 'toggle' })
+    W.DS_UI_Slots = W.DS_UI_Slots || (function () {
+        const buttons = [];   // { id, label, icon, title, onClick, slot, el }
+        const toggles = [];   // { id, label, defaultOn, onChange, state, el }
+        function addButton(cfg) {
+            if (!cfg || !cfg.id) throw new Error('addButton 需要 id');
+            if (buttons.find(b => b.id === cfg.id)) return false;
+            buttons.push(Object.assign({ slot: 'toolbar', label: '', icon: '', title: '' }, cfg));
+            scheduleInject();
+            return true;
+        }
+        function addToggle(cfg) {
+            if (!cfg || !cfg.id) throw new Error('addToggle 需要 id');
+            if (toggles.find(t => t.id === cfg.id)) return false;
+            const saved = loadToggleState();
+            const initState = (saved[cfg.id] !== undefined) ? !!saved[cfg.id] : !!cfg.defaultOn;
+            toggles.push(Object.assign({ slot: 'toggle', label: '', defaultOn: false }, cfg, { state: initState }));
+            scheduleInject();
+            return true;
+        }
+        function removeItem(id) {
+            let i = buttons.findIndex(b => b.id === id);
+            if (i >= 0) { const b = buttons[i]; if (b.el && b.el.parentNode) b.el.remove(); buttons.splice(i, 1); return true; }
+            i = toggles.findIndex(t => t.id === id);
+            if (i >= 0) { const t = toggles[i]; if (t.el && t.el.parentNode) t.el.remove(); toggles.splice(i, 1); return true; }
+            return false;
+        }
+        // 开关状态持久化
+        const TOGGLE_STATE_KEY = 'ds_plugin_toggle_state';
+        function loadToggleState() {
+            try { return JSON.parse(localStorage.getItem(TOGGLE_STATE_KEY) || '{}') || {}; } catch { return {}; }
+        }
+        function persistToggle(id, state) {
+            try {
+                const all = loadToggleState();
+                all[id] = !!state;
+                localStorage.setItem(TOGGLE_STATE_KEY, JSON.stringify(all));
+            } catch {}
+        }
+        function setToggle(id, state) {
+            const t = toggles.find(x => x.id === id);
+            if (!t) return false;
+            t.state = !!state;
+            persistToggle(id, t.state);
+            if (t.el) {
+                // 触发一次视觉更新：直接重绘样式
+                const chip = t.el;
+                const dot = chip.querySelector('span');
+                if (t.state) {
+                    chip.style.borderColor = 'rgba(57,100,254,0.5)';
+                    chip.style.color = 'var(--dsw-alias-label-primary,#f9fafb)';
+                    if (dot) dot.style.background = 'var(--dsw-alias-brand-primary,#3964fe)';
+                } else {
+                    chip.style.borderColor = 'rgba(255,255,255,0.12)';
+                    chip.style.color = 'var(--dsw-alias-label-tertiary,#81858c)';
+                    if (dot) dot.style.background = '#61666b';
+                }
+            }
+            try { t.onChange && t.onChange(t.state); } catch (e) { showToast('error', '插件开关出错: ' + e.message, 4000); }
+            return true;
+        }
+        function list() {
+            return {
+                buttons: buttons.map(b => ({ id: b.id, label: b.label, slot: b.slot })),
+                toggles: toggles.map(t => ({ id: t.id, label: t.label, state: t.state })),
+            };
+        }
+        let _scheduled = false;
+        function scheduleInject() {
+            if (_scheduled) return;
+            _scheduled = true;
+            setTimeout(() => { _scheduled = false; try { injectPluginUI(); } catch (e) { log('插件UI注入异常: ' + e.message); } }, 100);
+        }
+        return { addButton, addToggle, removeItem, setToggle, list, buttons, toggles, _loadToggleState: loadToggleState, _persistToggle: persistToggle, _scheduleInject: scheduleInject };
+    })();
+
+    function injectPluginUI() {
+        if (!W.DS_UI_Slots) return;
+        // 1. 工具栏按钮（发送按钮旁）
+        const sendBtn = pick(SEL.sendBtn);
+        if (sendBtn) {
+            const toolbar = pick(SEL.toolbar) || sendBtn.closest('div')?.parentElement;
+            if (toolbar) {
+                let host = document.getElementById('ds-plugin-toolbar-host');
+                if (!host) {
+                    host = document.createElement('div');
+                    host.id = 'ds-plugin-toolbar-host';
+                    host.style.cssText = 'display:flex;align-items:center;gap:6px;';
+                    const sendWrapper = sendBtn.closest('div[style="width: fit-content;"]') || sendBtn;
+                    toolbar.insertBefore(host, sendWrapper);
+                }
+                W.DS_UI_Slots.buttons.forEach(b => {
+                    if (b.slot !== 'toolbar') return;
+                    if (b.el && b.el.parentNode) return;
+                    const btn = document.createElement('button');
+                    btn.className = 'ds-compress-btn';
+                    btn.style.cssText = 'height:34px;font-size:13px;';
+                    if (b.title) btn.title = b.title;
+                    btn.innerHTML = (b.icon || '') + (b.label ? '<span>' + esc(b.label) + '</span>' : '');
+                    btn.addEventListener('click', () => {
+                        try { Promise.resolve(b.onClick && b.onClick(btn)).catch(e => showToast('error', '插件按钮出错: ' + e.message, 4000)); }
+                        catch (e) { showToast('error', '插件按钮出错: ' + e.message, 4000); }
+                    });
+                    host.appendChild(btn);
+                    b.el = btn;
+                });
+            }
+        }
+        // 2. 开关（深度思考/智能搜索旁边）
+        const toggleToggles = document.querySelectorAll('.ds-toggle-button');
+        if (toggleToggles.length) {
+            const bar = toggleToggles[0].parentElement; // _58b31c9
+            if (bar) {
+                let host = document.getElementById('ds-plugin-toggle-host');
+                if (!host) {
+                    host = document.createElement('div');
+                    host.id = 'ds-plugin-toggle-host';
+                    host.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-left:6px;';
+                    bar.appendChild(host);
+                }
+                W.DS_UI_Slots.toggles.forEach(t => {
+                    if (t.slot !== 'toggle') return;
+                    if (t.el && t.el.parentNode) return;
+                    const chip = document.createElement('div');
+                    chip.className = 'ds-toggle-button ds-plugin-toggle' + (t.state ? ' ds-plugin-toggle-on' : '');
+                    chip.style.cssText = 'display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:4096px;cursor:pointer;font-size:12px;border:1px solid rgba(255,255,255,0.12);color:var(--dsw-alias-label-tertiary,#81858c);transition:all .15s;user-select:none;';
+                    const dot = document.createElement('span');
+                    dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:#61666b;transition:background .15s;';
+                    chip.appendChild(dot);
+                    if (t.label) { const sp = document.createElement('span'); sp.textContent = t.label; chip.appendChild(sp); }
+                    const applyStyle = () => {
+                        if (t.state) {
+                            chip.style.borderColor = 'rgba(57,100,254,0.5)';
+                            chip.style.color = 'var(--dsw-alias-label-primary,#f9fafb)';
+                            dot.style.background = 'var(--dsw-alias-brand-primary,#3964fe)';
+                        } else {
+                            chip.style.borderColor = 'rgba(255,255,255,0.12)';
+                            chip.style.color = 'var(--dsw-alias-label-tertiary,#81858c)';
+                            dot.style.background = '#61666b';
+                        }
+                    };
+                    applyStyle();
+                    chip.addEventListener('click', () => {
+                        t.state = !t.state;
+                        applyStyle();
+                        try { W.DS_UI_Slots._persistToggle(t.id, t.state); } catch (e) {}
+                        try { t.onChange && t.onChange(t.state); } catch (e) { showToast('error', '插件开关出错: ' + e.message, 4000); }
+                    });
+                    host.appendChild(chip);
+                    t.el = chip;
+                });
+            }
+        }
+    }
+
     function waitForAIResponse(maxWait = 180000) {
         return new Promise(resolve => {
             const start = Date.now();
@@ -2105,7 +2871,15 @@ ${getPluginsPrompt()}
         if (findNewChatButton()) {
             injectUI();
             injectCompressBtn();
+            try { injectPluginUI(); } catch (e) {}
         }
     }, 1000);
+
+    // 未开启互联模式时，也扫描并折叠页面上已加载的对话内容（只做展示，不执行任何工具）
+    setInterval(() => {
+        if (isModeOn) return;
+        try { hideToolResultMessages(); } catch (e) {}
+        try { foldAllToolcalls(); } catch (e) {}
+    }, 2000);
 
 })();

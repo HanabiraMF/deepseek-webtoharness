@@ -1,0 +1,66 @@
+// ===== 官方内置插件数据 =====
+window.PLUGINS = [
+  // 开发执行
+  { id: 'python_run', name: 'Python 运行器', cat: '开发执行', icon: 'python',
+    desc: '直接运行 Python 代码或脚本，自动处理 UTF-8 编码，支持传入命令行参数。',
+    usage: '<op>python_run</op>\n<code>print("hello")</code>' },
+  { id: 'git_helper', name: 'Git 安全助手', cat: '开发执行', icon: 'git',
+    desc: '执行 Git 常用操作（status/log/diff），自动切换 UTF-8 代码页，内置高危命令拦截。',
+    usage: '<op>git_helper</op>\n<command>status --short</command>' },
+
+  // 系统控制
+  { id: 'process_mgr', name: '进程管理器', cat: '系统控制', icon: 'cpu',
+    desc: '查看进程列表、按名称查找进程、或强制结束指定 PID 的进程。',
+    usage: '<op>process_mgr</op>\n<action>find</action>\n<name>node.exe</name>' },
+  { id: 'notify', name: '桌面通知', cat: '系统控制', icon: 'bell',
+    desc: '弹出 Windows 系统级 Toast 通知，任务完成后第一时间提醒你。',
+    usage: '<op>notify</op>\n<title>完成</title>\n<message>任务已结束</message>' },
+  { id: 'screenshot', name: '屏幕截图', cat: '系统控制', icon: 'camera',
+    desc: '截取当前主屏幕保存为 PNG，可配合 image 工具直接让 AI 查看桌面。',
+    usage: '<op>screenshot</op>\n<filename>shot.png</filename>' },
+  { id: 'text_to_speech', name: '语音播报', cat: '系统控制', icon: 'mic',
+    desc: '调用系统原生 TTS 引擎朗读文字，支持语速和音量调节。',
+    usage: '<op>text_to_speech</op>\n<text>任务已完成</text>' },
+  { id: 'env_info', name: '环境诊断', cat: '系统控制', icon: 'server',
+    desc: '一键收集硬件规格、Node/Python 版本、关键环境变量，快速排查环境问题。',
+    usage: '<op>env_info</op>' },
+
+  // 网络
+  { id: 'net_check', name: '网络检查', cat: '网络', icon: 'globe',
+    desc: '查询指定端口的占用情况，或不带参数列出系统当前所有监听端口。',
+    usage: '<op>net_check</op>\n<port>8080</port>' },
+  { id: 'local_server', name: '本地服务器', cat: '网络', icon: 'server',
+    desc: '一键把工作区目录启动为 HTTP 静态服务器，支持自定义端口。',
+    usage: '<op>local_server</op>\n<action>start</action>\n<port>8080</port>' },
+  { id: 'wifi_info', name: 'Wi-Fi 信息', cat: '网络', icon: 'wifi',
+    desc: '获取当前 Wi-Fi 的 SSID、密码、信号强度，或列出所有保存的网络。',
+    usage: '<op>wifi_info</op>\n<action>current</action>' },
+  { id: 'download_file', name: '文件下载', cat: '网络', icon: 'download',
+    desc: '从 URL 流式下载文件到工作区，支持大文件，不占内存。',
+    usage: '<op>download_file</op>\n<url>https://...</url>\n<dest>file.zip</dest>' },
+
+  // 文件处理
+  { id: 'zip_tool', name: 'ZIP 压缩', cat: '文件处理', icon: 'archive',
+    desc: '原生压缩或解压 ZIP 文件，基于 PowerShell，支持大体积目录。',
+    usage: '<op>zip_tool</op>\n<action>compress</action>\n<source>dir</source>\n<target>out.zip</target>' },
+  { id: 'pdf_tool', name: 'PDF 提取', cat: '文件处理', icon: 'pdf',
+    desc: '提取 PDF 文件的纯文本内容，缺少 pypdf 库时自动执行 pip install。',
+    usage: '<op>pdf_tool</op>\n<path>doc.pdf</path>' },
+  { id: 'sqlite_tool', name: 'SQLite 数据库', cat: '文件处理', icon: 'database',
+    desc: '零依赖直连 SQLite，可即时建表、插入数据或执行复杂查询并返回 JSON。',
+    usage: '<op>sqlite_tool</op>\n<action>query</action>\n<db>a.db</db>\n<sql>SELECT * FROM t</sql>' },
+  { id: 'json_tool', name: 'JSON 工具箱', cat: '文件处理', icon: 'braces',
+    desc: '格式化、压缩、校验 JSON，或将 JSON 数组一键转换为 CSV 表格。',
+    usage: '<op>json_tool</op>\n<action>format</action>\n<source>data.json</source>' },
+  { id: 'image_tool', name: '图片处理', cat: '文件处理', icon: 'image',
+    desc: '按比例缩放图片尺寸、转换图片格式，基于 System.Drawing 高质量插值。',
+    usage: '<op>image_tool</op>\n<source>a.png</source>\n<dest>b.jpg</dest>\n<width>300</width>' },
+  { id: 'crypto_tool', name: '加密与哈希', cat: '文件处理', icon: 'lock',
+    desc: '计算文本或文件的 MD5/SHA 哈希，生成随机密码，支持 AES 加解密。',
+    usage: '<op>crypto_tool</op>\n<action>hash</action>\n<text>hello</text>' },
+  { id: 'qrcode_gen', name: '二维码生成', cat: '文件处理', icon: 'qr',
+    desc: '将任意文字或链接生成二维码图片，自动安装 qrcode 依赖。',
+    usage: '<op>qrcode_gen</op>\n<text>https://chat.deepseek.com</text>' },
+];
+
+window.CATEGORIES = ['全部', '开发执行', '系统控制', '网络', '文件处理'];
