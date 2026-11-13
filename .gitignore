@@ -32,3 +32,6 @@ plugins/_private/
 
 # 视频制作临时产物
 video/
+
+# 本地归档目录（旧包、备份、临时产物）
+_archive/
