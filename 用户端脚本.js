@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -608,8 +608,16 @@ ${getPluginsPrompt()}
 
         while (Date.now() - start < timeoutMs) {
             const btn = pick(SEL.sendBtn);
-            const disabled = !btn || btn.className.includes('disabled') || btn.getAttribute('aria-disabled') === 'true';
-            if (!disabled) {
+            if (!btn) { await sleep(100); continue; }
+            
+            const disabled = btn.className.includes('disabled') || btn.getAttribute('aria-disabled') === 'true';
+            // 识别“停止生成”按钮：DeepSeek 生成中时按钮图标变成方块(rect)或带停止标签
+            const isGenerating = btn.querySelector('rect') !== null 
+                || /stop|停止/i.test(btn.getAttribute('aria-label') || '') 
+                || /stop|停止/i.test(btn.className) 
+                || /停止/i.test(btn.innerText || '');
+                
+            if (!disabled && !isGenerating) {
                 btn.click();
                 restoreFocusSoon();
                 return { ok: true };
