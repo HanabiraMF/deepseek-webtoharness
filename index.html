@@ -44,35 +44,19 @@ a { color: inherit; text-decoration: none; }
 code { font-family: var(--font-mono); }
 
 /* 背景 */
-.bg-grid {
-  position: fixed; inset: 0; z-index: -2;
-  background-image: linear-gradient(to right, rgba(255,255,255,0.025) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgba(255,255,255,0.025) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
-  -webkit-mask-image: radial-gradient(circle at 50% 0%, black 0%, transparent 70%);
-}
-.bg-glow {
-  position: fixed; top: -30%; left: 50%; transform: translateX(-50%);
-  width: 900px; height: 700px; z-index: -1; pointer-events: none;
-  background: radial-gradient(circle, var(--primary-glow) 0%, transparent 60%);
-  filter: blur(90px);
-}
 
 .container { max-width: 1140px; margin: 0 auto; padding: 0 24px; }
 .section { padding: 90px 0; }
 .section-head { text-align: center; margin-bottom: 54px; }
 .section-title {
   font-size: 2.1rem; font-weight: 750; letter-spacing: -0.02em;
-  background: linear-gradient(180deg, #fff 0%, #b0b0ba 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  color: var(--text-main);
 }
 .section-desc { color: var(--text-muted); font-size: 1.08rem; margin-top: 12px; max-width: 640px; margin-left: auto; margin-right: auto; }
 
 /* 导航 */
 .nav {
   position: sticky; top: 0; z-index: 100;
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
   background: rgba(8, 8, 10, 0.72);
   border-bottom: 1px solid var(--border);
 }
@@ -100,10 +84,10 @@ code { font-family: var(--font-mono); }
   cursor: pointer; border: 1px solid transparent; font-family: inherit; transition: all .2s;
 }
 .btn svg { width: 18px; height: 18px; }
-.btn-primary { background: linear-gradient(180deg, var(--primary) 0%, var(--primary-strong) 100%); color: #fff; box-shadow: 0 6px 20px rgba(57,100,254,0.25); }
-.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(57,100,254,0.38); }
+.btn-primary { background: linear-gradient(180deg, var(--primary) 0%, var(--primary-strong) 100%); color: #fff; }
+
 .btn-outline { background: transparent; color: var(--text-main); border-color: var(--border); }
-.btn-outline:hover { border-color: var(--border-hover); background: rgba(255,255,255,0.04); transform: translateY(-1px); }
+.btn-outline:hover { border-color: var(--border-hover); background: rgba(255,255,255,0.04); }
 .btn-sm { padding: 8px 14px; font-size: 0.88rem; border-radius: var(--radius-sm); }
 .btn-sm svg { width: 15px; height: 15px; }
 
@@ -111,18 +95,16 @@ code { font-family: var(--font-mono); }
 .badge {
   display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px; border-radius: 100px;
   border: 1px solid var(--border); background: var(--bg-card); font-size: 0.84rem; color: var(--text-muted);
-  backdrop-filter: blur(10px);
 }
 .badge svg { width: 14px; height: 14px; color: var(--primary); }
-.badge .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.badge .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 
 /* Hero */
 .hero { padding: 110px 0 70px; text-align: center; }
 .hero h1 {
   font-size: clamp(2.6rem, 6vw, 4.4rem); font-weight: 850; letter-spacing: -0.03em; line-height: 1.06;
   margin: 26px 0 22px;
-  background: linear-gradient(180deg, #fff 0%, #8f8f9a 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  color: var(--text-main);
 }
 .hero .lead { font-size: 1.22rem; color: var(--text-muted); max-width: 640px; margin: 0 auto 38px; }
 .hero-actions { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; }
@@ -139,9 +121,8 @@ code { font-family: var(--font-mono); }
 .card {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 28px; transition: all .25s; position: relative; overflow: hidden;
-  backdrop-filter: blur(10px);
 }
-.card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); transform: translateY(-2px); }
+.card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
 .card-icon {
   width: 46px; height: 46px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center;
   background: rgba(86,134,254,0.1); border: 1px solid rgba(86,134,254,0.2); margin-bottom: 18px;
@@ -158,16 +139,13 @@ code { font-family: var(--font-mono); }
   border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 36px;
   position: relative; overflow: hidden;
 }
-.tech-card::before {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(86,134,254,0.5), transparent);
-}
+
 .tech-card h3 { font-size: 1.32rem; font-weight: 700; display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .tech-card h3 svg { width: 24px; height: 24px; color: var(--primary); }
 .tech-card > p { color: var(--text-muted); font-size: 0.98rem; margin-bottom: 22px; }
 .code-window {
   background: #040406; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden;
-  font-family: var(--font-mono); font-size: 0.82rem; box-shadow: var(--shadow-lg);
+  font-family: var(--font-mono); font-size: 0.82rem;
 }
 .code-head {
   background: rgba(255,255,255,0.03); padding: 9px 14px; border-bottom: 1px solid var(--border);
@@ -217,7 +195,7 @@ code { font-family: var(--font-mono); }
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
   padding: 22px; display: flex; flex-direction: column; gap: 14px; transition: all .25s;
 }
-.plugin-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); transform: translateY(-2px); }
+.plugin-card:hover { border-color: var(--border-hover); background: var(--bg-card-hover); }
 .plugin-head { display: flex; align-items: flex-start; gap: 13px; }
 .plugin-head .card-icon { margin-bottom: 0; width: 42px; height: 42px; }
 .plugin-head .card-icon svg { width: 21px; height: 21px; }
@@ -255,12 +233,7 @@ code { font-family: var(--font-mono); }
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-xl);
   padding: 58px 40px; text-align: center; position: relative; overflow: hidden;
 }
-.cta-box::after {
-  content: ''; position: absolute; inset: 0; border-radius: var(--radius-xl); padding: 1.5px;
-  background: linear-gradient(135deg, rgba(86,134,254,0.4), transparent 45%, rgba(86,134,254,0.18));
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none;
-}
+
 .cta-box h2 { font-size: 2rem; font-weight: 750; margin-bottom: 12px; }
 .cta-box p { color: var(--text-muted); margin-bottom: 30px; }
 .cta-actions { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; }
@@ -273,16 +246,13 @@ code { font-family: var(--font-mono); }
 .footer .disclaimer { margin-top: 14px; font-size: 0.8rem; color: var(--text-dim); }
 
 /* 动画 */
-@keyframes fadeUp { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
-.animate { animation: fadeUp .7s cubic-bezier(0.16, 1, 0.3, 1) both; }
-.d1 { animation-delay: .08s; } .d2 { animation-delay: .16s; } .d3 { animation-delay: .24s; }
+@keyframes fadeUp { from { opacity: 0; } to { opacity: 1; } }
+
+.d1 { } .d2 { } .d3 { }
 
 </style>
 </head>
 <body>
-  <div class="bg-grid"></div>
-  <div class="bg-glow"></div>
-
   <nav class="nav">
     <div class="nav-inner">
       <a href="index.html" class="nav-logo">
@@ -461,7 +431,7 @@ code { font-family: var(--font-mono); }
       <a href="https://raw.githubusercontent.com/HanabiraMF/deepseek-webtoharness/main/start.bat" class="btn btn-primary"><span data-icon="download"></span> start.bat</a>
     </div>
     <div style="text-align: center; margin-top: 20px; font-size: 0.85rem; color: var(--text-dim);">
-      国内访问 GitHub 缓慢？ <a href="https://hanabira.lanzoue.com/idcyM4f8lwof" target="_blank" style="color: var(--primary); border-bottom: 1px dashed currentColor;">蓝奏云备用下载</a> (密码: Hana)
+      国内访问 GitHub 缓慢？ <a href="https://hanabira.lanzoue.com/iF3dz4fva4xi" target="_blank" style="color: var(--primary); border-bottom: 1px dashed currentColor;">蓝奏云备用下载</a> (密码: Hana)
     </div>
   </section>
 
@@ -487,7 +457,7 @@ code { font-family: var(--font-mono); }
 
   <footer class="footer">
     <div class="container">
-      <p>Made with <span class="heart" data-icon="heart"></span> for DeepSeek Web &copy; 2026 <a href="https://github.com/HanabiraMF" target="_blank">HanabiraMF</a></p>
+      <p>Made with for DeepSeek Web &copy; 2026 <a href="https://github.com/HanabiraMF" target="_blank">HanabiraMF</a></p>
       <p class="disclaimer">免责声明：本地服务与脚本会访问您的文件系统，请确保仅在安全的个人电脑上使用。</p>
     </div>
   </footer>
