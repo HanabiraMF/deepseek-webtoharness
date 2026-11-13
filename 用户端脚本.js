@@ -781,13 +781,16 @@ ${getPluginsPrompt()}
     function hideToolResultMessages() {
         pickAll(SEL.userMsg).forEach(el => {
             if (el.getAttribute('data-ds-hidden') === 'true') return;
-            const text = el.innerText || '';
-            if (text.trim().startsWith('【系统执行结果】\n')) {
-                el.setAttribute('data-ds-hidden', 'true');
-                const parent = el.parentElement;
+            // 向上寻找包含整条消息的根节点（兼容带附件的消息，附件和文字是兄弟节点）
+            const msgRoot = el.closest('.ds-message') || el;
+            const text = msgRoot.innerText || '';
+            // 只要包含系统执行结果且含有成功/失败标志，就进行折叠
+            if (text.includes('【系统执行结果】') && (text.includes('[成功]') || text.includes('[失败]') || text.includes('[取消]'))) {
+                msgRoot.setAttribute('data-ds-hidden', 'true');
+                const parent = msgRoot.parentElement;
                 if (!parent || parent.querySelector('.ds-user-tool-card')) return;
 
-                el.style.display = 'none';
+                msgRoot.style.display = 'none';
                 const container = document.createElement('div');
                 container.className = 'ds-user-tool-card ds-fold-list';
 
@@ -2123,6 +2126,14 @@ ${getPluginsPrompt()}
         await flushBatch();
         setProgress(progressTotal, progressTotal, '执行完成');
         setTimeout(hideProgress, 1200);
+
+        // 附件上传防抖：如果只执行了 attach 且没有 send_message，延迟 3 秒再回传，给用户留出继续拖拽的时间
+        const hasAttach = results.some(r => r.op === 'attach');
+        const hasSendMessage = results.some(r => r.op === 'send_message');
+        if (hasAttach && !hasSendMessage) {
+            log('检测到附件上传，延迟 3 秒回传以防打断后续操作...');
+            await sleep(3000);
+        }
 
         let sent = false, lastReason = '', retryCount = 0;
         const MAX_AUTO_RETRIES = 30; // 最多自动重试 30 次（约 5 分钟），避免死循环
