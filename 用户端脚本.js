@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.6
 // @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -74,7 +74,7 @@
     let pendingLastTry = 0;
     const PENDING_MAX_RETRIES = 3;
     const toolcallStatusMap = new Map(); // sig -> 'running' | 'success' | 'error' | 'queue'
-    const PROCESS_TIMEOUT = 10 * 60 * 1000; // 10 分钟兜底；单批工具 + 多个弹窗累计可能远超 30s，不能太短
+    const PROCESS_TIMEOUT = 2 * 60 * 1000; // 10 分钟兜底；单批工具 + 多个弹窗累计可能远超 30s，不能太短
     const interjectQueue = []; // 用户插话队列，随下一次结果回传一并发送
     const ignoreKeys = new Set(); // 「在当前对话内开始」时已存在的消息 key：其工具调用一律不执行，避免重跑历史
 
@@ -2188,22 +2188,33 @@ ${getPluginsPrompt()}
     async function checkAndProcess() {
         if (!isModeOn) return;
         if (isPaused) return;
+
+        // 【关键修复】切换对话/页面时：强制复位所有状态机，避免 isProcessing 锁卡死导致后续无响应
+        if (location.href !== currentChatUrl) {
+            log('检测到页面切换，重置执行状态机');
+            currentChatUrl = location.href;
+            isProcessing = false;
+            isCooldown = false;
+            isCoolingDown = false;
+            processingStart = 0;
+            if (cooldownTimer) { clearTimeout(cooldownTimer); cooldownTimer = null; }
+            msgStore.clear();
+            toolcallStatusMap.clear();
+            pendingResults = null;
+            pendingRetries = 0;
+            // 注意：不 return，继续往下走以处理新页面中可能存在的待执行调用
+        }
+
         if (isCoolingDown) return;
         if (isProcessing) {
             // 弹窗等待用户期间不强制复位（用户可能还没点确定）
             if (!awaitingUser && processingStart && Date.now() - processingStart > PROCESS_TIMEOUT) {
                 log(`⚠ 上一次工具执行超过 ${PROCESS_TIMEOUT/1000}s 未结束，强制复位`);
                 isProcessing = false;
+                processingStart = 0;
             } else return;
         }
         if (isCooldown || isCompressing) return;
-
-        if (location.href !== currentChatUrl) {
-            currentChatUrl = location.href;
-            msgStore.clear();
-        toolcallStatusMap.clear();
-            return;
-        }
 
         scanMessages();
 
