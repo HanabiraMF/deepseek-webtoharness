@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.4
 // @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -234,7 +234,7 @@
         .ds-fold-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s cubic-bezier(.4,0,.2,1), margin-top .28s cubic-bezier(.4,0,.2,1), opacity .2s; opacity: 0; margin-top: 0; }
         .ds-fold-item.open .ds-fold-detail { grid-template-rows: 1fr; margin-top: 8px; opacity: 1; }
         .ds-fold-detail-inner { overflow: hidden; }
-        .ds-fold-detail-body { padding: 10px 12px 10px 14px; background: #0d0f14; border-left: 3px solid var(--dsw-alias-brand-primary, #3964fe); border-radius: 8px; font-size: 12.5px; line-height: 1.65; color: #9aa4b2; word-break: break-word; font-family: ui-monospace, monospace; overflow: auto; max-height: 520px; }
+        .ds-fold-detail-body { padding: 10px 12px 10px 14px; background: #0d0f14; border-left: 3px solid var(--dsw-alias-brand-primary, #3964fe); border-radius: 8px; font-size: 12.5px; line-height: 1.65; color: #9aa4b2; word-break: break-word; font-family: ui-monospace, monospace; }
         .ds-param-list { display: flex; flex-direction: column; gap: 6px; }
         .ds-param-row { display: flex; gap: 10px; align-items: flex-start; }
         .ds-param-key { flex-shrink: 0; min-width: 62px; color: var(--dsw-alias-brand-primary, #3964fe); font-weight: 600; font-size: 12px; }
