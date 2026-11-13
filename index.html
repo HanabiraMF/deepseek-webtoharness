@@ -386,18 +386,19 @@ window.downloadEmbedded = function(filename) {
       
       <div class="tech-card animate d1">
         <h3><span data-icon="server"></span> 全栈接管：本地 Node.js 拓展</h3>
-        <p>突破浏览器沙箱限制！AI 可编写原生 Node.js 代码存入本地 plugins/，通过热重载，直接调用系统底层 API、甚至连接数据库。</p>
+        <p>突破浏览器沙箱限制！AI 可编写原生 Node.js 代码存入本地 plugins/，通过热重载，直接调用系统底层 API。若需操作文件，请引入内置的 <code>./_workspace</code> 模块获取真实工作区路径。</p>
         <div class="code-window">
           <div class="code-head">
             <div class="code-dot r"></div><div class="code-dot y"></div><div class="code-dot g"></div>
             <span style="margin-left: 8px;">plugins/my_node_tool.js</span>
           </div>
           <div class="code-body"><span class="cmt">// AI 写入本地的 Node.js 插件</span>
+<span class="kw">const</span> { resolveWsPath } = <span class="fn">require</span>(<span class="str">'./_workspace'</span>); <span class="cmt">// 获取真实工作区</span>
 <span class="kw">module</span>.exports = {
-  <span class="kw">name</span>: <span class="str">'scan_local_network'</span>,
+  <span class="kw">name</span>: <span class="str">'read_local_file'</span>,
   <span class="kw">execute</span>: <span class="kw">async</span> (args) => {
-    <span class="kw">const</span> { execSync } = <span class="fn">require</span>(<span class="str">'child_process'</span>);
-    <span class="kw">return</span> execSync(<span class="str">'arp -a'</span>).toString();
+    <span class="kw">const</span> absPath = <span class="kw">await</span> resolveWsPath(args.file);
+    <span class="kw">return</span> require(<span class="str">'fs'</span>).readFileSync(absPath, <span class="str">'utf8'</span>);
   }
 };</div>
         </div>
