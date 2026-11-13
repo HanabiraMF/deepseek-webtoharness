@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const fs = require('fs');
 const path = require('path');
 
@@ -29,7 +30,7 @@ module.exports = {
         const sql = V(args, 'sql');
         if (!action || !sql) return '错误：需要 action 和 sql 参数';
         
-        const absPath = path.resolve(process.cwd(), dbPath);
+        const absPath = await resolveWsPath(dbPath);
         const dir = path.dirname(absPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 

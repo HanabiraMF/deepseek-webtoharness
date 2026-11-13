@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const fs = require('fs');
 const path = require('path');
 
@@ -33,7 +34,7 @@ JSON 处理工具：格式化、压缩、校验、JSON 转 CSV。
 
         let rawStr = text;
         if (source) {
-            const abs = path.resolve(process.cwd(), source);
+            const abs = await resolveWsPath(source);
             if (!fs.existsSync(abs)) return '错误：文件不存在 ' + source;
             rawStr = fs.readFileSync(abs, 'utf8');
         }
@@ -74,7 +75,7 @@ JSON 处理工具：格式化、压缩、校验、JSON 转 CSV。
         }
 
         if (dest) {
-            const absDest = path.resolve(process.cwd(), dest);
+            const absDest = await resolveWsPath(dest);
             const dir = path.dirname(absDest);
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
             fs.writeFileSync(absDest, out, 'utf8');

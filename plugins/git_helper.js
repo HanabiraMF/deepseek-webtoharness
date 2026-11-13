@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const { exec } = require('child_process');
 
 const V = (a, k) => {
@@ -19,9 +20,10 @@ module.exports = {
         if (/reset\s+--hard|clean\s+-[a-z]*f|push\s+--force|push\s+-f\b/i.test(cmd)) {
             return '错误：出于安全原因，禁止执行 reset --hard / clean -fd / push --force。请手动执行。';
         }
+        const ws = await getWorkspace();
         return new Promise((resolve) => {
             // 切到 UTF-8 代码页，防止 git 输出的中文路径或提交信息乱码
-            exec(`chcp 65001 >nul & git ${cmd}`, { cwd: process.cwd(), timeout: 20000, windowsHide: true }, (err, stdout, stderr) => {
+            exec(`chcp 65001 >nul & git ${cmd}`, { cwd: ws, timeout: 20000, windowsHide: true }, (err, stdout, stderr) => {
                 let res = '';
                 if (stdout) res += stdout;
                 if (stderr) res += (res ? '\n' : '') + stderr;

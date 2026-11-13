@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const { exec } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -27,7 +28,7 @@ module.exports = {
         const text = V(args, 'text');
         const dest = V(args, 'dest') || ('qrcode_' + Date.now() + '.png');
         if (!text) return '错误：缺少 text';
-        const dstAbs = path.resolve(process.cwd(), dest);
+        const dstAbs = await resolveWsPath(dest);
         const dir = path.dirname(dstAbs);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 

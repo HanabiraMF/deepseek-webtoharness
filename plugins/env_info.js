@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const os = require('os');
 const { execSync } = require('child_process');
 const path = require('path');
@@ -35,7 +36,7 @@ module.exports = {
             }
         }
 
-        res += `当前工作目录: ${process.cwd()}\n`;
+        res += `当前工作目录: ${await getWorkspace()}\n`;
         res += '\n=== 关键环境变量 ===\n';
         const keys = ['PATH', 'PYTHON_HOME', 'NODE_ENV', 'NPM_CONFIG_PREFIX', 'JAVA_HOME'];
         for (const k of keys) {

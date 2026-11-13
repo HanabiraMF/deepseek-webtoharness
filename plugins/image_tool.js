@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -30,8 +31,8 @@ module.exports = {
         const source = V(args, 'source');
         const dest = V(args, 'dest');
         if (!source || !dest) return '错误：需要 source 和 dest';
-        const srcAbs = path.resolve(process.cwd(), source);
-        const dstAbs = path.resolve(process.cwd(), dest);
+        const srcAbs = await resolveWsPath(source);
+        const dstAbs = await resolveWsPath(dest);
         if (!fs.existsSync(srcAbs)) return '错误：源图片不存在 ' + source;
         const dir = path.dirname(dstAbs);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

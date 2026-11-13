@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const { exec } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -25,7 +26,7 @@ module.exports = {
     execute: async (args) => {
         const p = V(args, 'path');
         if (!p) return '错误：缺少 path';
-        const abs = path.resolve(process.cwd(), p);
+        const abs = await resolveWsPath(p);
         if (!fs.existsSync(abs)) return '错误：文件不存在 ' + p;
 
         const pyCode = `

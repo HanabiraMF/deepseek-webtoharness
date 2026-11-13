@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -30,7 +31,7 @@ module.exports = {
     execute: async (args) => {
         const action = V(args, 'action');
         const port = parseInt(V(args, 'port') || '8080', 10);
-        const dir = path.resolve(process.cwd(), V(args, 'dir') || '.');
+        const dir = path.resolve(await getWorkspace(), V(args, 'dir') || '.');
 
         if (action === 'stop') {
             if (currentServer) {

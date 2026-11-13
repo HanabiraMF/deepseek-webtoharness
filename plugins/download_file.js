@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const fs = require('fs');
 const path = require('path');
 const { Readable } = require('stream');
@@ -28,7 +29,7 @@ module.exports = {
         const dest = V(args, 'dest');
         if (!url || !dest) return '错误：需要 url 和 dest 参数';
 
-        const absPath = path.resolve(process.cwd(), dest);
+        const absPath = await resolveWsPath(dest);
         const dir = path.dirname(absPath);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 

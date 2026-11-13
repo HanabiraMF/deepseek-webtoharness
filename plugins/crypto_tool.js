@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -33,7 +34,7 @@ module.exports = {
         const source = V(args, 'source');
         if (!action) return '错误：缺少 action';
         if (!text && source) {
-            const abs = path.resolve(process.cwd(), source);
+            const abs = await resolveWsPath(source);
             if (!fs.existsSync(abs)) return '错误：文件不存在 ' + source;
             text = fs.readFileSync(abs);
         }

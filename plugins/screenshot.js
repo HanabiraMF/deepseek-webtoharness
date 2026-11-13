@@ -1,3 +1,4 @@
+const { resolveWsPath, getWorkspace } = require('./_workspace');
 const { exec } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -18,7 +19,7 @@ module.exports = {
     description: '截取当前主屏幕并保存为工作区内的 png，返回相对路径（可配合 image 工具直接查看）。参数：filename(可选)。',
     execute: async (args) => {
         const filename = (V(args, 'filename') || ('screenshot_' + Date.now() + '.png')).replace(/[<>:"|?*]/g, '_');
-        const absPath = path.resolve(process.cwd(), filename);
+        const absPath = await resolveWsPath(filename);
         const ps = `
             Add-Type -AssemblyName System.Windows.Forms
             Add-Type -AssemblyName System.Drawing
