@@ -41,4 +41,28 @@ async function resolveWsPath(p) {
     return path.resolve(ws, String(p));
 }
 
-module.exports = { getWorkspace, resolveWsPath };
+// 统一参数提取：兼容 正常参数 / extraArgs / 原始 toolcall 文本中的自定义标签
+function V(args, k) {
+    if (!args || !k) return '';
+    if (args[k] != null && args[k] !== '') return String(args[k]);
+    const ex = args.extraArgs || {};
+    if (ex[k] != null && ex[k] !== '') return String(ex[k]);
+    const lower = k.toLowerCase();
+    for (const key of Object.keys(ex)) {
+        if (key.toLowerCase() === lower && ex[key] != null && ex[key] !== '') return String(ex[key]);
+    }
+    if (ex.toolcall) {
+        const re = new RegExp('<' + k + '>([\\s\\S]*?)<\\/' + k + '>', 'i');
+        const m = String(ex.toolcall).match(re);
+        if (m) {
+            let v = m[1];
+            // 解 CDATA 包裹
+            const c = v.match(/^\s*<!\[CDATA\[([\s\S]*?)\]\]>\s*$/);
+            if (c) v = c[1];
+            return v.trim();
+        }
+    }
+    return '';
+}
+
+module.exports = { getWorkspace, resolveWsPath, V };

@@ -16,14 +16,11 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'download_file',
-    description: `
-从 URL 下载文件保存到工作区（基于 Node 原生 fetch，流式写入，不占内存，支持大文件）。
-【参数】
-- url: 下载链接
-- dest: 保存的文件相对路径 (如 "downloads/video.mp4")
-【示例】
-{"op":"download_file","url":"https://example.com/image.png","dest":"test.png"}
-`,
+    description: "从 URL 下载文件保存到工作区，流式写入支持大文件",
+    params: [
+        { k: "url", cn: "下载链接", req: true, d: "" },
+        { k: "dest", cn: "保存路径", req: true, d: "如 downloads/video.mp4" }
+    ],
     execute: async (args) => {
         const url = V(args, 'url');
         const dest = V(args, 'dest');

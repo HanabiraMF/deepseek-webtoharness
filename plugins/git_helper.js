@@ -13,7 +13,10 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'git_helper',
-    description: '在工作区执行 Git 命令。参数：command(如 "status", "log --oneline -5", "diff HEAD")。出于安全已屏蔽 reset --hard / clean -fd / push --force。',
+    description: "在工作区执行 Git 命令",
+    params: [
+        { k: "command", cn: "命令", req: true, d: "如 status、log --oneline -5、diff HEAD" }
+    ],
     execute: async (args) => {
         const cmd = V(args, 'command').trim();
         if (!cmd) return '错误：缺少 command';

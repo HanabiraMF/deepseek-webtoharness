@@ -14,16 +14,12 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'sqlite_tool',
-    description: `
-在本地执行 SQLite 数据库操作（零依赖，使用 Node.js 内置 sqlite 模块）。
-【参数】
-- action: 'query' (执行 SELECT 并返回 JSON) 或 'exec' (执行 CREATE/INSERT/UPDATE/DELETE)
-- db: 数据库文件相对路径，如 "data/test.db"。如果目录不存在会自动创建。
-- sql: 要执行的 SQL 语句。
-【示例】
-{"op":"sqlite_tool","action":"exec","db":"test.db","sql":"CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT);"}
-{"op":"sqlite_tool","action":"query","db":"test.db","sql":"SELECT * FROM users;"}
-`,
+    description: "SQLite 数据库操作，零依赖",
+    params: [
+        { k: "action", cn: "操作", req: true, d: "query 查询 / exec 执行" },
+        { k: "db", cn: "数据库", req: true, d: "相对路径，如 data/test.db" },
+        { k: "sql", cn: "SQL 语句", req: true, d: "" }
+    ],
     execute: async (args) => {
         const action = V(args, 'action');
         const dbPath = V(args, 'db') || 'test.db';

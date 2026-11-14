@@ -15,7 +15,8 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'env_info',
-    description: '获取当前系统的软硬件环境、Node/Python 版本以及一些关键的环境变量，用于排查环境问题。无参数。',
+    description: "获取系统软硬件、Node/Python 版本等环境信息",
+    params: [],
     execute: async (args) => {
         let res = '=== 系统环境信息 ===\n';
         res += `平台: ${os.platform()} ${os.arch()}\n`;

@@ -16,17 +16,14 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'image_tool',
-    description: `
-图片处理：缩放、格式转换。基于 Windows System.Drawing。
-【参数】
-- source: 源图片相对路径
-- dest: 目标图片相对路径
-- width: (可选) 目标宽度（像素），不填则按比例
-- height: (可选) 目标高度（像素），不填则按比例
-- format: (可选) 输出格式：'jpg' / 'png' / 'bmp' / 'gif'，默认按 dest 扩展名
-【示例】
-{"op":"image_tool","source":"a.png","dest":"b.jpg","width":"300"}
-`,
+    description: "图片缩放与格式转换",
+    params: [
+        { k: "source", cn: "源图片", req: true, d: "" },
+        { k: "dest", cn: "目标图片", req: true, d: "" },
+        { k: "width", cn: "宽度", req: false, d: "像素，不填按比例" },
+        { k: "height", cn: "高度", req: false, d: "像素，不填按比例" },
+        { k: "format", cn: "输出格式", req: false, d: "jpg / png / bmp / gif，默认按扩展名" }
+    ],
     execute: async (args) => {
         const source = V(args, 'source');
         const dest = V(args, 'dest');

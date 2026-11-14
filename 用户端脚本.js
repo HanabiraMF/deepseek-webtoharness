@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      2.6
-// @description  基于工作区文件的本地智能体扩展系统（纯静默结束判定 + toolcall与返回结果双重折叠 + 启动位置可选）
+// @version      3.5
+// @description  基于工作区文件的本地智能体扩展系统（插件参数表统一 + attach 自动发送 + 静默结束判定 + 双重折叠）
 // @author       You
 // @match        https://chat.deepseek.com/*
 // @grant        unsafeWindow
@@ -27,9 +27,12 @@
         question: Svg('<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M6.2 6.2a1.8 1.8 0 1 1 2.8 1.5c-.6.5-1 1-1 1.6v.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11.7" r="0.7" fill="currentColor"/>'),
         copy:     Svg('<rect x="5" y="5" width="9" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M3 11V3h8" stroke="currentColor" stroke-width="1.3"/>'),
         arrow:    Svg('<path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>', 12),
+        compress: Svg('<path d="M8 1.5v4.5M5.5 3.5L8 6.5l2.5-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 14.5V10M5.5 12.5L8 9.5l2.5 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>', 18),
         circle:   Svg('<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>', 12),
         circleSpin: `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" class="ds-svg ds-spin"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-opacity="0.25" stroke-width="1.5"/><path d="M8 2.5a5.5 5.5 0 0 1 5.5 5.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
         chevron:  Svg('<path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>', 12),
+        min:      Svg('<path d="M3.5 8h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>', 12),
+        restore:  Svg('<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" stroke="currentColor" stroke-width="1.4"/>', 12),
     };
 
     let isModeOn = false, step = 0;
@@ -47,6 +50,9 @@
     let currentChatUrl = location.href, lastExecTime = 0;
     let isPaused = false;
     let lastGoal = '';
+    // 面板显示模式：'sidebar' 侧边栏注入 / 'float' 悬浮窗（可拖动、分选项卡）
+    let panelMode = 'sidebar';
+    try { panelMode = localStorage.getItem('ds_panel_mode') === 'float' ? 'float' : 'sidebar'; } catch {}
 
     const TOKEN_KEY = 'ds_agent_token';
     let agentToken = localStorage.getItem(TOKEN_KEY) || '';
@@ -76,6 +82,9 @@
     const toolcallStatusMap = new Map(); // sig -> 'running' | 'success' | 'error' | 'queue'
     const PROCESS_TIMEOUT = 2 * 60 * 1000; // 10 分钟兜底；单批工具 + 多个弹窗累计可能远超 30s，不能太短
     const interjectQueue = []; // 用户插话队列，随下一次结果回传一并发送
+    let interjectAutoSendPending = false; // 插话是否已登记「等 AI 空闲后发送」
+    let interjectFlushing = false;        // 防止并发重复发送
+    let interjectNextTryAt = 0;           // 发送失败后的退避时间点（避免每 2 秒狂重试加剧限流）
     const ignoreKeys = new Set(); // 「在当前对话内开始」时已存在的消息 key：其工具调用一律不执行，避免重跑历史
 
     // ===== 消息状态存储：key = data-virtual-list-item-key =====
@@ -215,9 +224,53 @@
         .ds-log-area .ok { color: #4ade80; }
         .ds-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); z-index: 99999; display: flex; align-items: center; justify-content: center; opacity: 0; animation: ds-fadein 0.2s forwards; }
         .ds-dialog { background: var(--dsw-alias-bg-layer-2, #2c2c2e); color: var(--dsw-alias-label-primary, #f9fafb); border-radius: 12px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); display: flex; flex-direction: column; gap: 14px; transform: translateY(10px); animation: ds-slideup 0.3s forwards; max-height: 85vh; overflow-y: auto; }
-        .ds-compress-btn { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; border-radius: 4096px; background: var(--dsw-alias-brand-primary, #3964fe); color: #fff; border: none; cursor: pointer; transition: background-color .15s; white-space: nowrap; font-size: 13px; font-weight: 500; gap: 6px; font-family: inherit; }
-        .ds-compress-btn:hover:not(:disabled) { background: var(--dsw-static-deepseek-450, #5686fe); }
-        .ds-compress-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ds-plugin-btn { display: inline-flex; align-items: center; justify-content: center; height: 34px; padding: 0 14px; border-radius: 4096px; background: var(--dsw-alias-brand-primary, #3964fe); color: #fff; border: none; cursor: pointer; transition: background-color .15s; white-space: nowrap; font-size: 13px; font-weight: 500; gap: 6px; font-family: inherit; }
+        .ds-plugin-btn:hover:not(:disabled) { background: var(--dsw-static-deepseek-450, #5686fe); }
+        .ds-plugin-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* ===== 插件管理弹窗 ===== */
+        .ds-pm-list { max-height: 48vh; overflow-y: auto; margin: 2px 0; padding-right: 2px; }
+        .ds-pm-item { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 9px 12px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); }
+        .ds-pm-item + .ds-pm-item { margin-top: 6px; }
+        .ds-pm-name { font-family: ui-monospace, monospace; font-size: 13px; color: var(--dsw-alias-label-primary,#f9fafb); flex-shrink: 0; }
+        .ds-pm-desc { font-size: 11px; color: #888; flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
+        .ds-pm-actions { display: flex; gap: 6px; margin-left: auto; flex-shrink: 0; }
+        .ds-pm-tag { font-size: 10px; padding: 2px 7px; border-radius: 4px; background: rgba(57,100,254,0.15); color: #79a1ff; flex-shrink: 0; }
+        .ds-pm-tag.off { background: rgba(255,255,255,0.08); color: #888; }
+        .ds-pm-params-toggle { flex-basis: 100%; display: inline-flex; align-items: center; gap: 5px; padding: 0; margin-top: 2px; background: none; border: none; color: #888; font-size: 11px; cursor: pointer; text-align: left; font-family: inherit; }
+        .ds-pm-params-toggle:hover { color: #b0b8c4; }
+        .ds-pm-params-toggle .arrow { display: inline-block; width: 10px; text-align: center; color: #79a1ff; }
+        .ds-pm-params { flex-basis: 100%; margin-top: 4px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.08); font-size: 11px; color: #7a7a7a; line-height: 1.7; }
+.ds-pm-param { display: block; margin: 0 0 3px; white-space: normal; word-break: break-word; }
+.ds-pm-param:last-child { margin-bottom: 0; }
+.ds-pm-param .pk { font-family: ui-monospace, monospace; color: #9aa4b2; }
+.ds-pm-param.req .pk { color: #ffb74d; }
+.ds-pm-param .pcn { color: #6b7280; }
+.ds-pm-param .pd { display: block; color: #5f6672; padding-left: 12px; }
+/* ===== 技能列表（汉堡菜单）===== */
+        #ds-skill-btn-wrapper { display: inline-flex; align-items: center; margin: 0 0 0 -3px; }
+        #ds-skill-btn-wrapper .ds-skill-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 34px; padding: 0 11px; border-radius: 4096px; background: transparent; color: var(--dsw-alias-label-tertiary,#81858c); border: 1px solid rgba(255,255,255,0.12); cursor: pointer; font-size: 12px; font-family: inherit; transition: background-color .15s, color .15s, border-color .15s, transform .1s; white-space: nowrap; }
+        #ds-skill-btn-wrapper .ds-skill-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); color: var(--dsw-alias-label-primary,#f9fafb); border-color: rgba(255,255,255,0.2); }
+        #ds-skill-btn-wrapper .ds-skill-btn:active:not(:disabled) { transform: scale(0.97); }
+        #ds-skill-btn-wrapper .ds-skill-btn:disabled { opacity: .5; cursor: not-allowed; }
+        .ds-skill-pop { position: fixed; min-width: 236px; max-width: 300px; max-height: 52vh; overflow-y: auto; background: linear-gradient(180deg, rgba(44,44,46,0.98), rgba(36,36,38,0.98)); backdrop-filter: blur(14px); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06); padding: 6px; z-index: 100001; }
+        .ds-skill-pop-title { font-size: 10.5px; color: #7c8290; padding: 5px 8px 7px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; }
+        .ds-skill-item { display: flex; flex-direction: column; gap: 1px; padding: 7px 9px; border-radius: 7px; cursor: pointer; transition: background .12s, border-color .12s; border-left: 2px solid transparent; }
+        .ds-skill-item:hover { background: rgba(57,100,254,0.12); border-left-color: var(--dsw-alias-brand-primary,#3964fe); }
+        .ds-skill-item .sk-name { font-size: 12.5px; color: var(--dsw-alias-label-primary,#f9fafb); font-weight: 500; line-height: 1.3; }
+        .ds-skill-item .sk-plugin { display: inline-block; align-self: flex-start; font-size: 9.5px; color: #7fa9ff; background: rgba(57,100,254,0.15); padding: 0 5px; border-radius: 3px; line-height: 1.6; margin-top: 1px; }
+        .ds-skill-item .sk-desc { font-size: 10.5px; color: #8b909a; line-height: 1.4; word-break: break-word; margin-top: 1px; }
+        .ds-skill-empty { font-size: 11.5px; color: #7c8290; padding: 14px 10px; text-align: center; }
+        .ds-pm-drop { border: 1px dashed rgba(57,100,254,0.5); border-radius: 10px; padding: 22px 16px; text-align: center; color: #888; font-size: 12px; line-height: 1.7; transition: all .15s; }
+        .ds-pm-drop.hover { background: rgba(57,100,254,0.1); border-color: var(--dsw-alias-brand-primary,#3964fe); color: var(--dsw-alias-label-primary,#f9fafb); }
+        .ds-pm-file { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, monospace; font-size: 12px; color: #79a1ff; }
+        .ds-pm-btn { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: var(--dsw-alias-label-primary,#f9fafb); cursor: pointer; flex-shrink: 0; font-family: inherit; }
+        .ds-pm-btn:hover:not(:disabled) { background: rgba(255,255,255,0.08); }
+        .ds-pm-btn:disabled { opacity: .5; cursor: not-allowed; }
+        .ds-pm-btn.danger { color: #f25a5a; border-color: rgba(242,90,90,0.35); }
+        .ds-pm-btn.danger:hover:not(:disabled) { background: rgba(242,90,90,0.12); }
+        .ds-pm-section-title { font-size: 12px; color: #888; margin: 12px 0 6px; font-weight: 600; }
+        /* 插件按钮宿主为空时不占位，避免吃掉额外的 flex gap 造成视觉间距过大 */
+        #ds-plugin-toolbar-host:empty { display: none !important; }
         /* ===== 通用折叠列表 ===== */
         .ds-fold-list { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; width: 100%; box-sizing: border-box; }
         .ds-user-tool-card { width: 100%; box-sizing: border-box; align-self: stretch; }
@@ -250,7 +303,60 @@
         #ds-plugin-toolbar-host, #ds-plugin-toggle-host { pointer-events: auto; }
         /* 结果返回样式微调 */
         .ds-result-label { color: #10b981; }
-        
+
+        /* ===== 悬浮三窗口 ===== */
+        #ds-tab-bar { display: none !important; }
+        .ds-tab-pane { display: flex; flex-direction: column; gap: 8px; }
+        .ds-fw {
+            position: fixed; z-index: 99998; display: flex; flex-direction: column;
+            background: var(--dsw-alias-bg-layer-2, #2c2c2e);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5); overflow: hidden;
+            min-width: 220px; min-height: 80px;
+        }
+        .ds-fw-head {
+            flex-shrink: 0; height: 28px; display: flex; align-items: center; padding: 0 10px;
+            font-size: 12px; font-weight: 600; color: #79a1ff;
+            background: rgba(57,100,254,0.12); border-bottom: 1px solid rgba(255,255,255,0.06);
+            user-select: none; white-space: nowrap;
+        }
+        .ds-fw-body {
+            flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px;
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        #ds-fw-interject { resize: horizontal; height: auto !important; max-height: 60vh; }
+        #ds-fw-interject .ds-fw-body { overflow-y: auto; max-height: calc(60vh - 28px); }
+        #ds-fw-log { resize: both; }
+        #ds-fw-log .ds-log-area { flex: 1 1 auto; min-height: 60px; max-height: none; overflow-y: auto; }
+        /* 操作窗口 = 面板自身：高度随内容自适应、宽度可拖、不可缩放 */
+        #ds-local-panel.ds-fw-panel {
+            position: fixed; z-index: 99997; margin: 0; max-width: 92vw;
+            overflow: hidden; display: flex; flex-direction: column; resize: none; border-radius: 12px;
+            height: auto !important; max-height: 88vh;
+        }
+        #ds-local-panel.ds-fw-panel #ds-setup-container {
+            flex: 0 1 auto; min-height: 0; overflow-y: auto; max-height: calc(88vh - 76px);
+        }
+        #ds-local-panel.ds-fw-panel #ds-main-container {
+            flex: 0 1 auto; min-height: 0; overflow-y: auto; max-height: calc(88vh - 76px);
+        }
+        #ds-local-panel.ds-fw-panel #ds-plugin-menu-btn { flex-shrink: 0; }
+        #ds-local-panel.ds-fw-panel .ds-tab-pane[data-pane="interject"],
+        #ds-local-panel.ds-fw-panel .ds-tab-pane[data-pane="log"] { display: none !important; }
+        #ds-panel-head { user-select: none; }
+        .ds-fw-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .ds-fw-min, #ds-min-btn { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; padding: 0; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: #81858c; cursor: pointer; flex-shrink: 0; font-family: inherit; line-height: 0; }
+        .ds-fw-min:hover, #ds-min-btn:hover { background: rgba(255,255,255,0.12); color: #f9fafb; }
+        .ds-fw-min svg, #ds-min-btn svg { display: block; pointer-events: none; }
+        .ds-fw.ds-fw-minimized { resize: none !important; width: auto !important; min-width: 120px; height: auto !important; }
+        .ds-fw.ds-fw-minimized .ds-fw-body { display: none !important; }
+        /* 最小化态：只留标题栏，收成小胶囊 */
+        /* 最小化按钮仅在悬浮模式出现，侧栏不显示 */
+        #ds-local-panel:not(.ds-fw-panel) #ds-min-btn { display: none !important; }
+        #ds-local-panel.ds-minimized { padding: 6px 10px; gap: 0; width: auto !important; min-width: 0; }
+        #ds-local-panel.ds-minimized > *:not(#ds-panel-head) { display: none !important; }
+        #ds-local-panel.ds-minimized #ds-panel-head > span:last-child { gap: 4px; }
+
         /* 右上角悬浮通知 (Toast) */
         .ds-toast-container { position: fixed; top: 24px; right: 24px; z-index: 100000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
         .ds-toast { background: var(--dsw-alias-bg-layer-2, #1e1e1e); border: 1px solid #333; border-radius: 8px; padding: 12px 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px; color: #fff; font-size: 13px; font-family: inherit; transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s; opacity: 0; pointer-events: auto; max-width: 350px; word-break: break-all; }
@@ -361,46 +467,99 @@ ${taskGoal}
 收到 越界 时不要尝试绕过，应向用户说明；收到 执行失败 时看 error 详情修正路径或操作方式。
 
 【工具字典】
-- listdir: <path>目录</path><tree>true</tree> (列出目录；可选 tree=true 递归输出目录树)
-- openfile: <path>文件</path><offset>0</offset><limit>8000</limit> (读文件；可选 offset/limit 按字符分页，大文件可分多次读完)
-- mkdir: <path>目录</path> (创建空目录)
-- edit: <path>文件</path><old><![CDATA[原]]></old><new><![CDATA[新]]></new> (精准替换)
-- editline: <path>文件</path><line>行号</line><mode>replace|insert|delete</mode><content><![CDATA[...]]></content> (按行号编辑)
-- writefile: <path>文件</path><content><![CDATA[...]]></content> (整文件覆写)
-- append: <path>文件</path><content><![CDATA[...]]></content> (末尾追加)
-- replaceall: <find><![CDATA[找]]></find><replace><![CDATA[替换为]]></replace><path>目录或文件</path> (跨文件批量替换)
-- grep: <pattern>正则</pattern><path>目录</path> (正则搜索)
-- glob: <pattern>**/*.js</pattern> (通配符搜文件)
-- search: <pattern>关键词</pattern><path>目录</path><regex>false</regex><name>*.js</name><context>2</context><limit>50</limit> (全文检索：返回文件名+行号+上下文，可选正则/文件名过滤/上下文行数/结果上限)
-- tree: <path>目录</path><depth>4</depth><filter>.js,.ts</filter> (目录树：可控深度与扩展名过滤，带文件大小)
-- batch: <actions><![CDATA[ [{"op":"copy","from":"a","to":"b"},{"op":"del","path":"c"}] ]]></actions> (批量写操作，最多50个，逐条返回成败；子op支持 mkdir/writefile/append/del/move/copy/edit/editline/replaceall)
-- attach: <paths>a.png,b.pdf</paths> (把工作区内的文件「拖入」聊天输入框，支持多文件逗号分隔、图片/文档/大文件，上限200MB。常与 send_message 配合)
-- send_message: <content><![CDATA[要发送的文字]]></content> (发送输入框当前内容+已拖入的附件；content 可留空只发附件)
-- del: <path>目标</path> (删除)
-- move: <from>源</from><to>目标</to> (移动/重命名)
-- copy: <from>源</from><to>目标</to> (复制)
-- stat: <path>目标</path> (查看信息)
-- diff: <path1>文件1</path1><path2>文件2</path2> (对比两文件)
-- hash: <path>文件</path> (计算 SHA-256)
-- restore: <path>文件</path> (从 .bak 备份恢复该文件，用于撤销误改)
-- backups: <path>目录</path><limit>200</limit> (列出所有 .bak 备份，按时间倒序，含原文件是否存在、大小、时间。恢复前先查有哪些可恢复)
-- audit: <filter>正则</filter><limit>100</limit> (查看 .ds_audit.log 操作审计记录，可按正则筛选，用于排查"谁在什么时候改了什么")
-- cleanbaks: <path>目录</path><keepDays>7</keepDays><keepLatest>1</keepLatest> (清理旧备份：按天数或每文件保留最近N个，防备份堆积)
-- 【危险路径保护】对 Windows/Program Files/ProgramData/AppData/回收站 等系统敏感区域的写操作会被拒绝。若确需操作（如用户要求整理），在该 toolcall 内加 <force>true</force> 强制允许。所有写操作都会记入工作区 .ds_audit.log
-- readb64: <path>文件</path> (读取文件为 data URL，用于图片展示；一般由 image 工具内部调用)
-- exec: <command>命令</command><cwd>可选</cwd><timeout>可选毫秒</timeout> (自动执行命令，静默返回 stdout/stderr 和退出码)
-- waitfile: <path>文件</path><timeout>毫秒</timeout> (轮询等待文件生成)
-- ask: <question>问题</question><options><option>A</option><option>B</option></options> (询问用户)
-- preview: <path>路径</path> (预览网页/文档)
-- openurl: <url>地址</url> (打开网页)
-- fetch: <url>地址</url><method>GET</method><headers><![CDATA[{"Key":"Val"}]]></headers><content><![CDATA[...]]></content><saveTo>path</saveTo> (HTTP请求；可选 saveTo 把响应体保存到工作区文件，适合大响应)
-- image: <path>图片</path> (展示图片)
-- clipboard: <text>文本</text> (复制到剪贴板)
-- sleep: <timeout>1000</timeout> (休眠指定毫秒，最大 5 分钟；用于轮询间隔或等待外部进程)
-- gettime: (获取当前时间)
-- register_plugin: <plugin_name>工具名</plugin_name><plugin_js><![CDATA[(返回对象的 JS 代码)]]></plugin_js> (注册一个【前端】自定义工具，当前页面内存生效)
-- reload_server_plugins: (无参数) (如果你用 writefile 往 plugins/xxx.js 写了 Node.js 插件，调用此工具热加载它)
-- kill_process: <pid>进程ID</pid> (强制终止后台运行的程序。如果 exec 超时返回了 PID，且你觉得它卡死了，用它杀掉)
+
+━━━━━━ 文件读写 ━━━━━━
+- listdir: <path>目录</path><tree>true</tree>
+  列出目录内容；tree=true 递归输出整棵目录树（带大小）。不确定结构时第一步就用它。
+- openfile: <path>文件</path> + 二选一的分页方式
+  【字符模式】<offset>0</offset><limit>8000</limit> —— 按字符偏移读。
+  【行模式】<line>1</line> 起始行(1基) + <lines>200</lines> 读几行，或 <lineEnd>300</lineEnd> 读到第几行。
+  行模式输出会带行号前缀（如「  42 | code...」），大文件按行定位、看指定函数/段落时优先用行模式，比数 offset 直观。
+  默认最多 200 行；超长会提示「可设 line=N 继续读」。改文件前必须先读。
+- writefile: <path>文件</path><content>文件内容</content>
+  整文件覆写。会覆盖原内容，适合新建文件或整体重写；已有文件局部修改优先用 edit。内容含特殊字符时用 CDATA 包裹。
+- edit: <path>文件</path><old>原文</old><new>新文</new>
+  精准字符串替换。old 必须与文件内容完全一致且在整个文件中唯一，否则失败。含引号/&/尖括号等特殊字符时用 CDATA 包裹。
+- editline: <path>文件</path><line>行号</line><mode>replace|insert|delete</mode><content>内容</content>
+  按行号编辑。已知确切行号时比 edit 更稳，大段或特殊字符多的内容首选。
+- append: <path>文件</path><content>内容</content>
+  末尾追加，不改动原有内容。
+- replaceall: <find>找</find><replace>替换为</replace><path>目录或文件</path>
+  跨文件批量替换；path 给目录则递归处理目录下所有文本文件。
+- mkdir: <path>目录</path> 创建目录（支持多级）。
+- del: <path>目标</path> 删除文件或目录。
+- move: <from>源</from><to>目标</to> 移动或重命名。
+- copy: <from>源</from><to>目标</to> 复制文件或目录。
+- stat: <path>目标</path> 查看类型/大小/修改时间。
+
+━━━━━━ 搜索与浏览 ━━━━━━
+- grep: <pattern>正则</pattern><path>目录</path> 按正则搜内容，返回命中行。
+- glob: <pattern>**/*.js</pattern> 用通配符找文件路径。
+- search: <pattern>关键词</pattern><path>目录</path><regex>false</regex><name>*.js</name><context>2</context><limit>50</limit>
+  全文检索，返回文件名+行号+上下文。可选正则、文件名过滤、上下文行数、结果上限。定位代码位置首选。
+- tree: <path>目录</path><depth>4</depth><filter>.js,.ts</filter> 目录树，带文件大小，可控深度和扩展名。
+
+━━━━━━ 批量操作 ━━━━━━
+- batch: <actions>JSON 数组</actions>
+  一次执行最多 50 个写操作，逐条返回成败。子 op 支持 mkdir/writefile/append/del/move/copy/edit/editline/replaceall。多个独立写操作打包执行，省往返。示例：[{"op":"copy","from":"a","to":"b"},{"op":"del","path":"c"}]
+
+━━━━━━ 版本与审计 ━━━━━━
+- restore: <path>文件</path> 从 .bak 备份恢复该文件（撤销误改）。
+- backups: <path>目录</path><limit>200</limit> 列出所有 .bak 备份，按时间倒序；恢复前先查有哪些。
+- cleanbaks: <path>目录</path><keepDays>7</keepDays><keepLatest>1</keepLatest> 清理旧备份，防堆积。
+- audit: <filter>正则</filter><limit>100</limit> 查 .ds_audit.log 审计记录，排查谁在何时改了什么。
+- diff: <path1>文件1</path1><path2>文件2</path2> 对比两文件差异。
+- hash: <path>文件</path> 计算 SHA-256。
+
+━━━━━━ 命令执行与进程 ━━━━━━
+- exec: <command>命令</command><cwd>可选</cwd><timeout>可选毫秒</timeout>
+  执行 shell 命令，静默返回 stdout/stderr 和退出码。默认 30 秒超时；超时后进程转后台并返回 PID。引号、&、|、重定向符、%、$ 等特殊字符原样保留，可放心写复杂命令。想在后台常驻（如 dev server）显式设短 timeout（如 3000）。
+- waitfile: <path>文件</path><timeout>毫秒</timeout> 轮询等待文件出现。
+- kill_process: <pid>进程ID</pid> 强制终止后台进程（清理 exec 超时遗留的 PID）。
+- gettime: 获取当前系统时间（无参数）。
+- sleep: <timeout>1000</timeout> 休眠指定毫秒（最大 5 分钟），用于轮询间隔或等待外部进程。
+
+━━━━━━ 图片与文件交付（极易混淆，务必看清）━━━━━━
+- attach: <paths>a.png,b.pdf</paths>
+把工作区文件附加到聊天输入框并等待上传完成，随后随本次工具结果一起发送（不会单独发图打断思考）。支持多文件逗号分隔、图片/文档/大文件（上限 200MB）。
+  ★ 调用后文件会被发送，下一轮你就能看到图片或读取附件。image 做不到这点。
+- image: <path>图片</path>
+  在页面上展示图片缩略图，仅给用户看。注意：image 不会把图片内容传回给我（AI），只是 DOM 展示。
+  想让我自己看图，必须改用 attach。
+- readb64: <path>文件</path>
+  读文件为 data URL 字符串。超大文件（超过 60KB）会省略以防撑爆上下文；需在页面展示请改用 image。一般由 image 内部调用，少直接使用。
+- preview: <path>路径</path> 在页面内预览网页/文档。
+- openurl: <url>地址</url> 新标签页打开网址。
+
+━━━━━━ 网络 ━━━━━━
+- fetch: <url>地址</url><method>GET</method><headers>JSON 头</headers><content>请求体</content><saveTo>path</saveTo>
+  HTTP 请求，默认 30 秒超时。大响应用 saveTo 保存到工作区文件，避免刷屏。含特殊字符的头/体用 CDATA 包裹。
+
+━━━━━━ 交互与界面 ━━━━━━
+- ask: <question>问题</question><options><option>A</option><option>B</option></options> 弹窗询问用户并等待其选择。
+- clipboard: <text>文本</text> 复制文本到系统剪贴板。
+
+━━━━━━ 插件扩展 ━━━━━━
+- register_plugin: <plugin_name>工具名</plugin_name><plugin_js>返回对象的 JS 代码</plugin_js>
+  注册前端临时工具，当前页面内存生效，刷新即失效；适合调用浏览器能力。返回对象须含 execute(args)。
+★ 首选：- mount_plugin: <plugin_name>工具名</plugin_name><source>相对路径</source>
+  一步挂载服务端插件。用法（两步）：
+    1) 用 writefile 把插件代码写到工作区任意位置，如 tmp/my_tool.js
+    2) mount_plugin 指定 plugin_name 和 source 路径，服务端会读取该文件、校验、写入 plugins/、热加载
+  为什么分两步：代码不经过 XML 传输，避免大段代码被解析器截断。
+  插件代码模板（内部 name 必须与 plugin_name 完全一致）：
+    module.exports = { name: 'my_tool', description: '一句话简介', params: [{ k: 'arg1', cn: '参数中文名', req: true, d: '说明' }], execute: async (args) => { return '结果'; } };
+  可选引入共享工具：const { resolveWsPath, getWorkspace, V } = require('./_workspace');
+  （V(args,'key') 能可靠读取 args.extraArgs 和原始标签，推荐用它取参数）
+  服务端会自动：语法预检 → 备份旧版 → 写入 → 热加载 → 校验 name → 失败回滚。
+  挂载后立即可用，无需重启服务。
+
+- reload_server_plugins:（无参数）
+  仅在手动改过 plugins/ 目录下的文件、想重新加载时用。日常挂插件用 mount_plugin 即可。
+  服务端插件模板：module.exports = { name, description, params, execute: async (args) => { ... } }，可用 fs/child_process/http 等，无跨域限制，可持久化。description 写一句简介；参数用 params 数组描述（每项 { k:参数名, cn:中文名, req:是否必填, d:说明 }），会渲染成参数表进入系统提示词和插件菜单。
+
+━━━━━━ 危险路径保护 ━━━━━━
+对 Windows / Program Files / ProgramData / AppData / 回收站等系统敏感区域的写操作默认被拒绝。确需操作时在该 toolcall 内加 <force>true</force> 强制允许。所有写操作都会记入工作区 .ds_audit.log。
 
 【关于 exec 与长驻命令】
 - exec 会在临时 .bat/.sh 文件中执行你的命令，所以引号、&、|、>、%、$ 等特殊字符都会原样保留，可以放心写复杂命令。
@@ -468,6 +627,8 @@ module.exports = {
         toolbar: [{ label: '我的按钮', title: '悬停提示', onClick: (btn, self) => { alert('clicked'); } }],
         // 深度思考/智能搜索开关旁加开关（onChange 收到 (state, 插件对象)，状态自动持久化）
         toggle: [{ label: '我的开关', defaultOn: false, onChange: (on, self) => { console.log('switch', on); } }],
+// 加入「技能列表」汉堡菜单（点击后执行 onClick，可用于用户主动触发的功能）
+        skill: [{ name: '我的技能', desc: '点击后执行的操作说明', onClick: (self) => { alert('skill clicked'); } }],
         // 自定义该工具在折叠框里的参数渲染（返回 HTML 字符串；返回空则用默认参数表）
         renderTool: (call, self) => {
             return '<div style="color:#3964fe">自定义展示：' + (call.path || '') + '</div>';
@@ -481,15 +642,46 @@ ${getPluginsPrompt()}
 `;
     }
 
+    // 把插件的 name + description 渲染成提示词条目：
+    // 统一用 <op>插件名</op> 的形式调用，与内置工具完全一致；
+    // 多行 description 的后续行统一缩进两格，避免与系统提示词的其他段落混淆。
+    // 统一插件提示词格式：一行简介 + 参数表（中文名 + 是否必填 + 说明）
+    function fmtPluginEntry(p) {
+        const name = p.name || '(未命名)';
+        const desc = String(p.description || '(无描述)').replace(/\s+/g, ' ').trim();
+        let out = `- ${name}: ${desc}`;
+        const params = Array.isArray(p.params) ? p.params : [];
+        if (params.length) {
+            out += '\n  参数：';
+            for (const pa of params) {
+                const k = pa.k || '';
+                const cn = pa.cn ? `(${pa.cn})` : '';
+                const req = pa.req ? '必填' : '可选';
+                const d = pa.d ? `：${pa.d}` : '';
+                out += `\n    · ${k}${cn} [${req}]${d}`;
+            }
+        } else {
+            out += '\n  参数：无';
+        }
+        return out + '\n';
+    }
+
     function getPluginsPrompt() {
         let prompt = '';
-        if (W.DS_Agent_Plugins && W.DS_Agent_Plugins.length > 0) {
-            prompt += '【前端拓展工具】\n';
-            W.DS_Agent_Plugins.forEach(p => { prompt += `- ${p.name}: ${p.description}\n`; });
+        const front = (W.DS_Agent_Plugins || []);
+        const server = (W.serverPlugins || []);
+        if (!front.length && !server.length) return '';
+        prompt += '【拓展工具（插件）】\n';
+        prompt += '以下工具由插件提供，调用方式与内置工具完全相同：用 ```toolcall 包裹 <toolcall><op>工具名</op>参数...</toolcall>。\n';
+        prompt += '注意：插件常使用「自定义标签」传参（如 <schema>、<checks>、<rows>、<port> 等），这些标签必须写在 <toolcall> 内部；\n';
+        prompt += '      不要想当然认为只有内置参数名才有效——按插件说明里的标签名原样书写即可。\n';
+        if (front.length) {
+            prompt += '\n— 前端拓展工具（当前页面内存，刷新失效）—\n';
+            front.forEach(p => { prompt += fmtPluginEntry(p); });
         }
-        if (W.serverPlugins && W.serverPlugins.length > 0) {
-            prompt += '\n【服务端拓展工具 (Node.js)】\n';
-            W.serverPlugins.forEach(p => { prompt += `- ${p.name}: ${p.description}\n`; });
+        if (server.length) {
+            prompt += '\n— 服务端拓展工具（Node.js，可访问文件/系统/网络）—\n';
+            server.forEach(p => { prompt += fmtPluginEntry(p); });
         }
         return prompt;
     }
@@ -784,8 +976,10 @@ ${getPluginsPrompt()}
             // 向上寻找包含整条消息的根节点（兼容带附件的消息，附件和文字是兄弟节点）
             const msgRoot = el.closest('.ds-message') || el;
             const text = msgRoot.innerText || '';
-            // 只要包含系统执行结果且含有成功/失败标志，就进行折叠
-            if (text.includes('【系统执行结果】') && (text.includes('[成功]') || text.includes('[失败]') || text.includes('[取消]'))) {
+            // 严格判定：必须「第一行（忽略空行）就是【系统执行结果】」才折叠，
+            // 避免 AI 回复正文中偶然引用这个短语（或示例文本）被误判
+            const firstLine = (text.split('\n').find(l => l.trim()) || '').trim();
+            if (firstLine === '【系统执行结果】' && (text.includes('[成功]') || text.includes('[失败]') || text.includes('[取消]'))) {
                 msgRoot.setAttribute('data-ds-hidden', 'true');
                 const parent = msgRoot.parentElement;
                 if (!parent || parent.querySelector('.ds-user-tool-card')) return;
@@ -1138,9 +1332,22 @@ ${getPluginsPrompt()}
 
     async function toolOpenfile(call) {
         if (!call.path) throw new ToolError('参数校验', '缺少 path', '请在 <path> 中提供文件路径');
-        const offset = call.extraArgs?.offset;
-        const limit = call.extraArgs?.limit;
-        const r = await fsCall('openfile', { path: call.path, offset, limit });
+        const ex = call.extraArgs || {};
+        const body = { path: call.path };
+        // 行模式参数（优先于 offset/limit 字符模式）
+        for (const k of ['line', 'lines', 'lineEnd']) {
+            if (ex[k] != null && ex[k] !== '') body[k] = ex[k];
+        }
+        // 兼容直接写在内层标签的写法
+        if (body.line == null && call.line != null) body.line = call.line;
+        if (body.lines == null && call.lines != null) body.lines = call.lines;
+        if (body.lineEnd == null && call.lineEnd != null) body.lineEnd = call.lineEnd;
+        const hasLineMode = body.line != null || body.lines != null || body.lineEnd != null;
+        if (!hasLineMode) {
+            body.offset = ex.offset;
+            body.limit = ex.limit;
+        }
+        const r = await fsCall('openfile', body);
         if (!r.ok) throw new ToolError('读取文件', r.error, '请先 listdir 确认文件存在');
         return r.result;
     }
@@ -1379,6 +1586,12 @@ ${getPluginsPrompt()}
 
     async function toolExec(call, reason) {
         if (!call.command) throw new ToolError('参数校验', '缺少 command', '');
+        // 执行任意命令风险高：非完全权限模式必须确认
+        if (!autoMode) {
+            const cmdPreview = `<div style="background:#000;padding:8px;color:#4ade80;max-height:180px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:11px;">${esc(String(call.command).slice(0, 1200))}</div>`;
+            if (!await showConfirmDialog('执行命令', call.command.length > 120 ? call.command.slice(0, 120) + '…' : call.command, reason, cmdPreview))
+                throw new ToolError('用户确认', '用户取消了命令执行', '');
+        }
 
         const cwd = call.cwd || absPath;
         const timeout = call.timeout ? parseInt(call.timeout, 10) : 30000;
@@ -1584,19 +1797,22 @@ ${getPluginsPrompt()}
         if (!zone) throw new ToolError('定位输入框', '找不到聊天输入区', '页面可能未就绪，稍后重试');
 
         dispatchDropFiles(zone, files);
-        await sleep(400);
+        // 只附加、不发送：轮询等附件上传完成（发送按钮可用视为就绪）。
+        // 附件留在输入框，随本次工具结果文字一起作为【一条消息】发出，避免单独发图打断思考。
+        const upStart = Date.now();
+        let uploaded = false;
+        while (Date.now() - upStart < 15000) {
+            await sleep(300);
+            const btn = pick(SEL.sendBtn);
+            if (!btn) continue;
+            const disabled = btn.className.includes('disabled') || btn.getAttribute('aria-disabled') === 'true';
+            if (!disabled) { uploaded = true; await sleep(250); break; }
+        }
 
         const totalKB = files.reduce((s, f) => s + f.size, 0) / 1024;
-        return '已向输入框拖入 ' + files.length + ' 个文件（共 ' + totalKB.toFixed(1) + 'KB）：\n' +
+        return '已附加 ' + files.length + ' 个文件到输入框（共 ' + totalKB.toFixed(1) + 'KB）：\n' +
             files.map(f => '- ' + f.name + ' (' + f.type + ', ' + (f.size/1024).toFixed(1) + 'KB)').join('\n') +
-            '\n请检查输入框是否已出现文件附件，确认无误后可再调用 send_message 或手动发送。';
-    }
-
-    async function toolSendMessage(call) {
-        const text = call.content != null ? String(call.content) : (call.text != null ? String(call.text) : '');
-        const r = await sendMessage(text, 15000);
-        if (!r.ok) throw new ToolError('发送消息', r.reason || '发送失败', '确认输入框就绪、发送按钮可用');
-        return '消息已发送（' + text.length + ' 字符）' + (text ? '' : '（仅附件，无文字）');
+            '\n' + (uploaded ? '上传完成，将随本次工具结果一起发送，无需再次发送。' : '⚠ 等待上传超时，附件可能尚未就绪。');
     }
 
     async function toolFetch(call) {
@@ -1677,7 +1893,11 @@ ${getPluginsPrompt()}
             const existingIdx = W.DS_Agent_Plugins.findIndex(p => p.name === pluginName);
             if (existingIdx >= 0) {
                 try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_btn'); } catch {}
-                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
+try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_sk'); } catch {}
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_sk0'); } catch {}
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_sk1'); } catch {}
+                try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_sk2'); } catch {}
                 try { delete W.DS_ToolRenderers[pluginName]; } catch {}
                 W.DS_Agent_Plugins[existingIdx] = pluginObj;
             } else {
@@ -1719,6 +1939,21 @@ ${getPluginsPrompt()}
                         uiInfo.push('开关「' + (cfg.label || pluginName) + '」');
                     });
                 }
+// 3. 技能列表（汉堡菜单）
+                if (Array.isArray(ui.skill)) {
+                    ui.skill.forEach((cfg, idx) => {
+                        if (!cfg || typeof cfg.onClick !== 'function') return;
+                        const skId = 'plg_' + pluginName + '_sk' + (idx ? idx : '');
+                        W.DS_UI_Slots.addSkill({
+                            id: skId,
+                            name: cfg.name || pluginName,
+                            plugin: pluginName,
+                            desc: cfg.desc || '',
+                            onClick: () => cfg.onClick(pluginObj),
+                        });
+                        uiInfo.push('技能「' + (cfg.name || pluginName) + '」');
+                    });
+                }
                 // 3. 工具折叠详情自定义渲染
                 if (typeof ui.renderTool === 'function') {
                     W.DS_ToolRenderers[pluginName] = (call) => {
@@ -1737,6 +1972,34 @@ ${getPluginsPrompt()}
         }
     }
 
+    // 直接挂载服务端插件：AI 先把代码写成文件，这里只传 name + source 路径
+    // 代码不经过 XML 传输，彻底避免大段代码被解析器截断
+    async function toolMountPlugin(call) {
+        const ex = call.extraArgs || {};
+        const name = String(call.plugin_name || ex.plugin_name || '').trim();
+        const source = String(call.source || call.path || ex.source || ex.path || '').trim();
+        if (!name) throw new ToolError('参数校验', '缺少 plugin_name', '示例：<plugin_name>my_tool</plugin_name>');
+        if (!source) throw new ToolError('参数校验', '缺少 source', '先用 writefile 把插件代码写到工作区，再用 <source>相对路径</source> 指向它');
+        // 挂载插件会把代码载入服务端进程执行：非完全权限模式必须确认
+        if (!autoMode) {
+            if (!await showConfirmDialog('挂载服务端插件', name, call.reason,
+                `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/网络访问权限。</div>`))
+                throw new ToolError('用户确认', '用户取消了插件挂载', '');
+        }
+
+        const resp = await agentFetch('/plugins/write', { name, source }, 20000);
+        let data = {};
+        try { data = await resp.json(); } catch (e) {}
+        if (!resp.ok || data.error) {
+            throw new ToolError('挂载插件', data.error || `HTTP ${resp.status}`, '检查插件代码与 name 是否一致（name 需与文件名同形）');
+        }
+        if (data.plugins) W.serverPlugins = data.plugins;
+        const act = data.action === 'updated' ? '已更新' : '已创建';
+        const names = (data.plugins || []).map(p => p.name);
+        return `插件 ${data.name} ${act}并挂载成功（${data.file}）\n当前共 ${names.length} 个服务端插件。\n` +
+               `现在可直接用 <op>${data.name}</op> 调用，无需重启服务。`;
+    }
+
     async function toolReloadServerPlugins(call) {
         try {
             const resp = await agentFetch('/plugins/reload', {}, 5000);
@@ -1750,9 +2013,14 @@ ${getPluginsPrompt()}
         }
     }
 
-    async function toolKillProcess(call) {
+    async function toolKillProcess(call, reason) {
         const pid = call.pid || (call.extraArgs && call.extraArgs.pid);
         if (!pid) throw new ToolError('参数校验', '缺少 pid', '请提供要终止的进程 PID');
+        // 终止进程风险高：非完全权限模式必须确认
+        if (!autoMode) {
+            if (!await showConfirmDialog('终止进程', 'PID ' + pid, reason, `<div style="font-size:12px;color:#ffb74d;">该进程将被强制结束，未保存的数据可能丢失。</div>`))
+                throw new ToolError('用户确认', '用户取消了终止进程', '');
+        }
         try {
             const resp = await agentFetch('/exec/kill', { pid }, 5000);
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1785,7 +2053,6 @@ ${getPluginsPrompt()}
             case 'audit': return toolAudit(call);
             case 'cleanbaks': return toolCleanbaks(call, reason);
             case 'attach': return toolAttach(call);
-            case 'send_message': return toolSendMessage(call);
             case 'writefile': return toolWritefile(call, reason);
             case 'append': return toolAppend(call, reason);
             case 'edit': return toolEdit(call, reason);
@@ -1820,8 +2087,9 @@ ${getPluginsPrompt()}
             case 'sleep': return toolSleep(call);
             case 'gettime': return `当前系统时间: ${new Date().toLocaleString('zh-CN', { hour12: false })}`;
             case 'register_plugin': return toolRegisterPlugin(call);
-            case 'kill_process': return toolKillProcess(call);
+            case 'kill_process': return toolKillProcess(call, reason);
             case 'reload_server_plugins': return toolReloadServerPlugins(call);
+            case 'mount_plugin': return toolMountPlugin(call);
             default: {
                 // 1. 尝试在前端社区插件中查找
                 if (W.DS_Agent_Plugins) {
@@ -1953,12 +2221,131 @@ ${getPluginsPrompt()}
         if (interjectQueue.length === 0) {
             el.style.display = 'none';
             el.innerHTML = '';
-        } else {
-            el.style.display = 'block';
-            el.innerHTML = '<b>待发送插话 (' + interjectQueue.length + ')</b><br>' +
-                interjectQueue.map((m, i) => (i + 1) + '. ' + esc(m)).join('<br>');
+            return;
+        }
+        el.style.display = 'block';
+        const itemStyle = 'display:flex;align-items:flex-start;gap:6px;padding:2px 0;';
+        const delStyle = 'flex-shrink:0;cursor:pointer;border:none;background:transparent;color:#eab308;font-size:13px;line-height:1.2;padding:0 2px;opacity:.75;';
+        const rows = interjectQueue.map((m, i) =>
+            '<div style="' + itemStyle + '">' +
+                '<span style="flex:1;word-break:break-word;">' + (i + 1) + '. ' + esc(m) + '</span>' +
+                '<button class="ds-interject-del" data-idx="' + i + '" title="删除这条插话" style="' + delStyle + '">✕</button>' +
+            '</div>'
+        ).join('');
+        el.innerHTML =
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;gap:8px;">' +
+                '<b style="flex-shrink:0;">待发送插话 (' + interjectQueue.length + ')</b>' +
+                '<span style="display:flex;gap:4px;align-items:center;flex-shrink:0;">' +
+                    '<button class="ds-interject-send-now" title="' + (interjectAutoSendPending ? '已排队，点击取消' : '排队发送（等 AI 空闲后自动发出，不打断）') + '" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:1px solid ' + (interjectAutoSendPending ? 'rgba(234,179,8,.9)' : 'rgba(234,179,8,.45)') + ';background:' + (interjectAutoSendPending ? 'rgba(234,179,8,.35)' : 'rgba(234,179,8,.12)') + ';color:#eab308;border-radius:5px;line-height:1;">' +
+                        (interjectAutoSendPending
+                            ? '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
+                            : '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2.5 8h9M8 4.5L11.5 8 8 11.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2.5v11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity=".55"/></svg>') +
+                    '</button>' +
+                    '<button class="ds-interject-del-all" title="清空全部待发送插话" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:1px solid rgba(234,179,8,.3);background:transparent;color:#eab308;border-radius:5px;opacity:.85;line-height:1;">' +
+                        '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2c.05.7.63 1.3 1.34 1.3h3.12c.71 0 1.29-.6 1.34-1.3l.6-8.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+                    '</button>' +
+                '</span>' +
+            '</div>' + rows;
+
+        // 事件委托：删除单条 / 清空全部
+        el.querySelectorAll('.ds-interject-del').forEach(btn => {
+            btn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const idx = parseInt(btn.getAttribute('data-idx'), 10);
+                if (!isNaN(idx) && idx >= 0 && idx < interjectQueue.length) {
+                    const removed = interjectQueue.splice(idx, 1)[0];
+                    log('已删除插话: ' + removed);
+                    renderInterjectPending();
+                }
+            });
+        });
+        const allBtn = el.querySelector('.ds-interject-del-all');
+        if (allBtn) {
+            allBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                const n = interjectQueue.length;
+                interjectQueue.length = 0;
+                renderInterjectPending();
+                log('已清空 ' + n + ' 条待发送插话');
+            });
+        }
+        // 排队发送：只登记排队，由后台轮询等「AI 空闲」后再真正发出，绝不打断 AI。
+        // 依据 1-1 对话规则：AI 还在输出时发送 = 打断，必须先等它回复完。
+        const sendNowBtn = el.querySelector('.ds-interject-send-now');
+        if (sendNowBtn) {
+            sendNowBtn.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                if (!interjectQueue.length) return;
+                if (interjectAutoSendPending) {
+                    // 再点一次 = 取消排队
+                    interjectAutoSendPending = false;
+                    renderInterjectPending();
+                    log('已取消插话排队发送');
+                    try { showToast?.('info', '已取消排队', 1800); } catch (e) {}
+                    return;
+                }
+                interjectAutoSendPending = true;
+                renderInterjectPending();
+                log('插话已排队，将在 AI 本轮回复结束后自动发送');
+                try { showToast?.('warning', '已排队，等 AI 回复结束自动发送', 2500); } catch (e) {}
+                try { flushInterjectWhenIdle(); } catch (e) {}
+            });
         }
     }
+
+    // ===== 插话排队发送：等 AI 空闲（未生成中、发送按钮可用）才发 =====
+    // （状态变量在文件顶部 interjectQueue 旁声明，避免 TDZ 问题）
+
+    // 判断 AI 当前是否在生成回复：与 sendMessage 内判定保持一致
+    function isAIGenerating() {
+        const btn = pick(SEL.sendBtn);
+        if (!btn) return true; // 找不到发送按钮，保守视为忙碌
+        const disabled = btn.className.includes('disabled') || btn.getAttribute('aria-disabled') === 'true';
+        const generating = btn.querySelector('rect') !== null
+            || /stop|停止/i.test(btn.getAttribute('aria-label') || '')
+            || /stop|停止/i.test(btn.className)
+            || /停止/i.test(btn.innerText || '');
+        return disabled || generating;
+    }
+
+    async function flushInterjectWhenIdle() {
+        if (interjectFlushing) return;
+        if (!interjectAutoSendPending) return;
+        if (!interjectQueue.length) { interjectAutoSendPending = false; renderInterjectPending(); return; }
+        if (Date.now() < interjectNextTryAt) return; // 失败退避期内，先别重试
+        if (isAIGenerating()) return; // AI 还在回复，继续等（不打断）
+        interjectFlushing = true;
+        try {
+            const snapshot = interjectQueue.slice();
+            let text = '【用户插话】\n';
+            snapshot.forEach((m, i) => { text += (i + 1) + '. ' + m + '\n'; });
+            text += '（以上是用户在任务执行过程中补充的指令，请在继续操作时纳入考虑）';
+            const r = await sendMessage(text);
+            if (r && r.ok) {
+                for (const m of snapshot) {
+                    const idx = interjectQueue.indexOf(m);
+                    if (idx >= 0) interjectQueue.splice(idx, 1);
+                }
+                interjectAutoSendPending = false;
+                renderInterjectPending();
+                log('插话已在 AI 空闲时发送 ' + snapshot.length + ' 条');
+                try { showToast?.('success', '插话已发送', 2000); } catch (e) {}
+            } else {
+                const reason = (r && r.reason) || '未知原因';
+                // 失败退避 15 秒，避免每 2 秒狂重试把限流撞得更死
+                interjectNextTryAt = Date.now() + 15000;
+                log('插话排队发送失败: ' + reason + '（15 秒后重试）');
+                try { showToast?.('warning', '插话发送失败：' + reason + '（15 秒后重试）', 3000); } catch (e) {}
+            }
+        } catch (e) {
+            log('插话排队发送异常: ' + ((e && e.message) || e));
+        } finally {
+            interjectFlushing = false;
+        }
+    }
+
+    // 每 2 秒检查一次：有排队且 AI 空闲就发
+    setInterval(() => { try { flushInterjectWhenIdle(); } catch (e) {} }, 2000);
 
     function pushInterject(msg) {
         const m = String(msg || '').trim();
@@ -2055,7 +2442,7 @@ ${getPluginsPrompt()}
             toolcallCounter++;
             log(`执行 ${call.op} ${displayFor(call)}`);
             let result;
-            const NEEDS_CONFIRM = ['ask'];
+            const NEEDS_CONFIRM = ['ask', 'exec', 'kill_process', 'mount_plugin'];
             const isConfirmOp = NEEDS_CONFIRM.includes(call.op) ||
                 (!autoMode && ['writefile', 'append', 'edit', 'editline', 'replaceall', 'del'].includes(call.op));
             let TOOL_TIMEOUT_MS = 5000;
@@ -2114,7 +2501,8 @@ ${getPluginsPrompt()}
 
         for (const entry of toExec) {
             const op = String(entry.call.op || '').toLowerCase();
-            if (!entry.customResult && READONLY_OPS.has(op)) {
+            // waitfile 也进并行批：多个等待同时轮询，总耗时 = 最慢那个，而非逐个相加
+            if (!entry.customResult && (READONLY_OPS.has(op) || op === 'waitfile')) {
                 roBatch.push(entry);
             } else {
                 await flushBatch();
@@ -2127,12 +2515,11 @@ ${getPluginsPrompt()}
         setProgress(progressTotal, progressTotal, '执行完成');
         setTimeout(hideProgress, 1200);
 
-        // 附件上传防抖：如果只执行了 attach 且没有 send_message，延迟 3 秒再回传，给用户留出继续拖拽的时间
+// 附件回传：attach 只把文件附加到输入框，这里把工具结果文字连同附件一起发出（同一条消息）。
         const hasAttach = results.some(r => r.op === 'attach');
-        const hasSendMessage = results.some(r => r.op === 'send_message');
-        if (hasAttach && !hasSendMessage) {
-            log('检测到附件上传，延迟 3 秒回传以防打断后续操作...');
-            await sleep(3000);
+        if (hasAttach) {
+log('检测到附件，随结果一起发送...');
+await sleep(300);
         }
 
         let sent = false, lastReason = '', retryCount = 0;
@@ -2287,6 +2674,229 @@ ${getPluginsPrompt()}
         return null;
     }
 
+    // 渲染插件参数表（菜单用）
+    function fmtParamsHtml(params) {
+        if (!Array.isArray(params) || !params.length) return '';
+        let s = '<button class="ds-pm-params-toggle" data-expand="0" type="button"><span class="arrow">▸</span>参数 (' + params.length + ')</button>';
+        s += '<div class="ds-pm-params" style="display:none">';
+        for (const pa of params) {
+            const k = esc(pa.k || '');
+            const cn = pa.cn ? ' <span class="pcn">' + esc(pa.cn) + '</span>' : '';
+            const d = pa.d ? '<span class="pd">' + esc(pa.d) + '</span>' : '';
+            s += '<div class="ds-pm-param' + (pa.req ? ' req' : '') + '">' +
+                 '<span class="pk">' + k + (pa.req ? '*' : '') + '</span>' + cn + d + '</div>';
+        }
+        return s + '</div>';
+    }
+
+    async function openPluginManager() {
+        if (document.getElementById('ds-pm-overlay')) return;
+        const overlay = document.createElement('div');
+        overlay.id = 'ds-pm-overlay';
+        overlay.className = 'ds-overlay';
+        overlay.innerHTML = `<div class="ds-dialog" style="width:680px;max-width:94vw;">
+            <h3 style="margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px;">${I.copy}<span>插件管理</span></h3>
+            <div style="font-size:12px;color:#888;margin-bottom:10px;">服务端插件位于 <code>plugins/</code>，操作后自动热重载。</div>
+            <div id="ds-pm-body" class="ds-pm-list"></div>
+            <div style="display:flex;gap:8px;margin-top:14px;justify-content:space-between;align-items:center;">
+                <button class="ds-btn ds-btn-primary" id="ds-pm-add" style="height:32px;">+ 新建插件</button>
+                <div style="display:flex;gap:8px;">
+                    <button class="ds-btn ds-btn-secondary" id="ds-pm-reload" style="height:32px;">重新加载</button>
+                    <button class="ds-btn ds-btn-secondary" id="ds-pm-close" style="height:32px;">关闭</button>
+                </div>
+            </div>
+        </div>`;
+        document.body.appendChild(overlay);
+        const body = overlay.querySelector('#ds-pm-body');
+        const close = () => overlay.remove();
+        overlay.querySelector('#ds-pm-close').onclick = close;
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        const PROTECTED = new Set(['_workspace.js']);
+
+        async function doReload() {
+            try {
+                await agentFetch('/plugins/reload', {}, 8000);
+                const resp = await agentFetch('/plugins/list', {}, 5000);
+                if (resp.ok) { const d = await resp.json(); W.serverPlugins = d.plugins || []; }
+            } catch (e) { showToast('error', '重载失败: ' + e.message, 3000); }
+        }
+
+        async function render() {
+            body.innerHTML = '<div style="padding:24px;text-align:center;color:#888;">加载中...</div>';
+            let serverList = [];
+            try {
+                const resp = await agentFetch('/plugins/list', {}, 5000);
+                if (resp.ok) { const d = await resp.json(); serverList = d.plugins || []; W.serverPlugins = serverList; }
+            } catch {}
+            let files = [];
+            try {
+                const r = await fsCall('listdir', { path: 'plugins' });
+                if (!r.ok) throw new Error(r.error || '读取失败');
+                files = String(r.result).split('\n').filter(l => l.startsWith('f ')).map(l => l.slice(2).trim()).filter(Boolean);
+            } catch (e) {
+                body.innerHTML = '<div style="padding:24px;text-align:center;color:#f25a5a;">无法读取 plugins 目录：' + esc(e.message) + '</div>';
+                return;
+            }
+            const descByName = {};
+            const paramsByName = {};
+            serverList.forEach(p => { descByName[p.name] = p.description || ''; paramsByName[p.name] = Array.isArray(p.params) ? p.params : []; });
+            const jsFiles = files.filter(n => /\.js$/i.test(n)).sort();
+            const disabledFiles = files.filter(n => /\.js\.disabled$/i.test(n)).sort();
+
+            let html = '';
+            html += '<div class="ds-pm-section-title">已启用（' + jsFiles.length + '）</div>';
+            if (!jsFiles.length) html += '<div style="color:#888;font-size:12px;padding:4px 2px;">（无）</div>';
+            for (const f of jsFiles) {
+                const name = f.replace(/\.js$/i, '');
+                const isInternal = PROTECTED.has(f);
+                const desc = descByName[name] || (isInternal ? '内部共享模块（供其他插件 require）' : '(未在插件列表中找到，可能加载失败)');
+                const tag = isInternal ? '<span class="ds-pm-tag off">内部</span>' : '<span class="ds-pm-tag">已启用</span>';
+                html += '<div class="ds-pm-item">' + tag +
+                    '<span class="ds-pm-name">' + esc(name) + '</span>' +
+                    '<span class="ds-pm-desc" title="' + esc(desc) + '">' + esc(desc) + '</span>' +
+                    (isInternal ? '' : '<div class="ds-pm-actions"><button class="ds-pm-btn" data-act="disable" data-file="' + esc(f) + '">禁用</button>' +
+                    '<button class="ds-pm-btn danger" data-act="del" data-file="' + esc(f) + '">删除</button></div>') +
+                    fmtParamsHtml(paramsByName[name]) +
+                    '</div>';
+            }
+            html += '<div class="ds-pm-section-title">已禁用（' + disabledFiles.length + '）</div>';
+            if (!disabledFiles.length) html += '<div style="color:#888;font-size:12px;padding:4px 2px;">（无）</div>';
+            for (const f of disabledFiles) {
+                const base = f.replace(/\.js\.disabled$/i, '');
+                html += '<div class="ds-pm-item"><span class="ds-pm-tag off">已禁用</span>' +
+                    '<span class="ds-pm-name">' + esc(base) + '</span>' +
+                    '<span class="ds-pm-desc">' + esc(f) + '</span>' +
+                    '<div class="ds-pm-actions"><button class="ds-pm-btn" data-act="enable" data-file="' + esc(f) + '">启用</button>' +
+                    '<button class="ds-pm-btn danger" data-act="del" data-file="' + esc(f) + '">删除</button></div>' +
+                    '</div>';
+            }
+            const front = W.DS_Agent_Plugins || [];
+            html += '<div class="ds-pm-section-title">前端插件（' + front.length + '）· 仅当前页面有效</div>';
+            if (!front.length) html += '<div style="color:#888;font-size:12px;padding:4px 2px;">（无）</div>';
+            for (const p of front) {
+                html += '<div class="ds-pm-item"><span class="ds-pm-tag off">前端</span>' +
+                    '<span class="ds-pm-name">' + esc(p.name || '?') + '</span>' +
+                    '<span class="ds-pm-desc" title="' + esc(p.description || '') + '">' + esc(p.description || '(无描述)') + '</span>' +
+                    '</div>';
+            }
+            body.innerHTML = html;
+        }
+
+        body.addEventListener('click', async (e) => {
+            const toggle = e.target.closest('.ds-pm-params-toggle');
+            if (toggle) {
+                const exp = toggle.getAttribute('data-expand') === '1';
+                const panel = toggle.nextElementSibling;
+                if (panel && panel.classList.contains('ds-pm-params')) {
+                    panel.style.display = exp ? 'none' : '';
+                    toggle.setAttribute('data-expand', exp ? '0' : '1');
+                    const arrow = toggle.querySelector('.arrow');
+                    if (arrow) arrow.textContent = exp ? '▸' : '▾';
+                }
+                return;
+            }
+            const btn = e.target.closest('[data-act]');
+            if (!btn) return;
+            const act = btn.dataset.act, file = btn.dataset.file;
+            if (!act || !file) return;
+            btn.disabled = true;
+            try {
+                if (act === 'disable') {
+                    const r = await fsCall('move', { from: 'plugins/' + file, to: 'plugins/' + file + '.disabled' });
+                    if (!r.ok) throw new Error(r.error);
+                    await doReload(); showToast('success', '已禁用 ' + file, 2000);
+                } else if (act === 'enable') {
+                    const target = file.replace(/\.disabled$/i, '');
+                    const r = await fsCall('move', { from: 'plugins/' + file, to: 'plugins/' + target });
+                    if (!r.ok) throw new Error(r.error);
+                    await doReload(); showToast('success', '已启用 ' + target, 2000);
+                } else if (act === 'del') {
+                    const ok = await showConfirmDialog('删除插件文件', 'plugins/' + file, '删除后该插件将立即失效。若需保留请先禁用而非删除。确认删除？');
+                    if (!ok) { btn.disabled = false; return; }
+                    const r = await fsCall('del', { path: 'plugins/' + file });
+                    if (!r.ok) throw new Error(r.error);
+                    await doReload(); showToast('success', '已删除 ' + file, 2000);
+                }
+                await render();
+            } catch (err) {
+                showToast('error', '操作失败: ' + err.message, 4000);
+                btn.disabled = false;
+            }
+        });
+
+        overlay.querySelector('#ds-pm-reload').onclick = async () => {
+            try { await doReload(); showToast('success', '已热重载', 1500); } catch {}
+            render();
+        };
+        overlay.querySelector('#ds-pm-add').onclick = () => showAddForm();
+
+        function showAddForm() {
+            body.innerHTML = '<div style="display:flex;flex-direction:column;gap:12px;">' +
+                '<div class="ds-pm-drop" id="ds-pm-drop">' +
+                '  <div style="font-size:13px;margin-bottom:6px;">把 .js 插件文件拖到这里</div>' +
+                '  <div>或点击选择文件。文件名即插件名（如 my_tool.js）。</div>' +
+                '  <div style="margin-top:10px;"><button class="ds-btn ds-btn-secondary" id="ds-pm-pick" style="height:30px;">选择文件</button></div>' +
+                '  <input type="file" id="ds-pm-file-input" accept=".js,text/javascript" style="display:none;" />' +
+                '</div>' +
+                '<div id="ds-pm-file-info" style="display:none;font-size:12px;color:#888;"></div>' +
+                '<div id="ds-pm-status" style="font-size:12px;color:#888;"></div>' +
+                '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+                '<button class="ds-btn ds-btn-secondary" id="ds-pm-add-cancel" style="height:32px;">取消</button>' +
+                '</div></div>';
+
+            const drop = body.querySelector('#ds-pm-drop');
+            const fileInput = body.querySelector('#ds-pm-file-input');
+            const infoEl = body.querySelector('#ds-pm-file-info');
+            const statusEl = body.querySelector('#ds-pm-status');
+            body.querySelector('#ds-pm-add-cancel').onclick = () => render();
+            body.querySelector('#ds-pm-pick').onclick = (e) => { e.stopPropagation(); fileInput.click(); };
+            drop.onclick = () => fileInput.click();
+            fileInput.onchange = () => { if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]); };
+
+            ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); drop.classList.add('hover'); }));
+            ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); if (ev === 'dragleave' && drop.contains(e.relatedTarget)) return; drop.classList.remove('hover'); }));
+            drop.addEventListener('drop', (e) => {
+                const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+                if (f) handleFile(f);
+            });
+
+            async function handleFile(file) {
+                const name = (file.name || '').trim();
+                if (!/\.js$/i.test(name)) { showToast('error', '只支持 .js 插件文件', 3000); return; }
+                const pluginName = name.replace(/\.js$/i, '');
+                if (!/^[a-zA-Z0-9_]+$/.test(pluginName)) { showToast('error', '文件名只能包含字母、数字、下划线', 3000); return; }
+                infoEl.style.display = 'block';
+                infoEl.innerHTML = '已选择：<span class="ds-pm-file">' + esc(name) + '</span>（' + (file.size/1024).toFixed(1) + 'KB），正在上传...';
+                let code = '';
+                try { code = await file.text(); }
+                catch (e) { infoEl.innerHTML = '读取文件失败: ' + esc(e.message); return; }
+                if (!code || !code.trim()) { infoEl.innerHTML = '文件内容为空'; return; }
+                if (code.indexOf('module.exports') < 0) {
+                    infoEl.innerHTML = '⚠ 内容中未找到 module.exports，可能不是有效的服务端插件。仍将尝试写入。';
+                }
+                try {
+                    statusEl.textContent = '正在写入 plugins/' + pluginName + '.js ...';
+                    const r = await fsCall('writefile', { path: 'plugins/' + pluginName + '.js', content: code });
+                    if (!r.ok) throw new Error(r.error || '写入失败');
+                    statusEl.textContent = '写入完成，正在热加载...';
+                    await doReload();
+                    const exists = (W.serverPlugins || []).some(p => p.name === pluginName);
+                    if (exists) {
+                        showToast('success', '插件 ' + pluginName + ' 已安装并启用', 2500);
+                        await render();
+                    } else {
+                        statusEl.innerHTML = '<span style="color:#ffb74d;">文件已写入，但热加载后未发现该插件（可能内部 name 与文件名不一致或代码有误），请检查后重试。</span>';
+                    }
+                } catch (e) {
+                    statusEl.innerHTML = '<span style="color:#f25a5a;">安装失败: ' + esc(e.message) + '</span>';
+                }
+            }
+        }
+
+        await render();
+    }
+
     function injectUI() {
         if (document.getElementById('ds-local-panel')) return true;
         const newChatBtn = findNewChatButton();
@@ -2303,11 +2913,15 @@ ${getPluginsPrompt()}
         panel.id = 'ds-local-panel';
         panel.className = 'ds-panel-container';
         panel.innerHTML = `
-            <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div id="ds-panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:grab;">
                 <div style="display:flex;align-items:center;font-weight:600;color:var(--dsw-alias-brand-primary,#3964fe);gap:6px;">
                     <span id="ds-dot" class="ds-status-dot"></span>本地互联
                 </div>
-                <span id="ds-status" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);">未连接</span>
+                <span style="display:flex;align-items:center;gap:6px;">
+                    <span id="ds-status" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);">未连接</span>
+                    <button id="ds-min-btn" title="最小化"></button>
+                    <button id="ds-mode-btn" title="切换 侧边栏 / 悬浮窗" style="height:20px;padding:0 6px;font-size:10px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#81858c;cursor:pointer;font-family:inherit;">悬浮</button>
+                </span>
             </div>
             <div id="ds-setup-container" style="display:flex;flex-direction:column;gap:8px;">
                 <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
@@ -2339,33 +2953,211 @@ ${getPluginsPrompt()}
                 <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
             </div>
             <div id="ds-main-container" style="display:none;flex-direction:column;gap:8px;">
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <input id="ds-interject-input" class="ds-input" type="text" placeholder="插话（AI 执行时也会插队到下次结果）" style="flex:1;font-size:12px;" />
-                    <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">插话</button>
+                <div id="ds-tab-bar" class="ds-panel-tabs" style="display:none;">
+                    <button class="ds-tab-btn active" data-tab="interject">插话</button>
+                    <button class="ds-tab-btn" data-tab="log">日志</button>
+                    <button class="ds-tab-btn" data-tab="action">操作</button>
                 </div>
-                <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.5;padding:6px 9px;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);border-left:3px solid #eab308;border-radius:6px;"></div>
-                <div id="ds-progress-wrap" style="display:none;flex-direction:column;gap:4px;">
-                    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dsw-alias-label-tertiary,#81858c);">
-                        <span id="ds-progress-text">执行中...</span>
-                        <span id="ds-progress-count">0/0</span>
+
+                <div class="ds-tab-pane active" data-pane="interject">
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <input id="ds-interject-input" class="ds-input" type="text" placeholder="插话（AI 执行时也会插队到下次结果）" style="flex:1;font-size:12px;" />
+                        <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">插话</button>
                     </div>
-                    <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;">
-                        <div id="ds-progress-bar" style="height:100%;width:0%;background:var(--dsw-alias-brand-primary,#3964fe);border-radius:2px;transition:width .25s cubic-bezier(.4,0,.2,1);"></div>
+                    <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.5;padding:6px 9px;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);border-left:3px solid #eab308;border-radius:6px;"></div>
+                </div>
+
+                <div class="ds-tab-pane" data-pane="log">
+                    <div id="ds-progress-wrap" style="display:none;flex-direction:column;gap:4px;">
+                        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dsw-alias-label-tertiary,#81858c);">
+                            <span id="ds-progress-text">执行中...</span>
+                            <span id="ds-progress-count">0/0</span>
+                        </div>
+                        <div style="height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;">
+                            <div id="ds-progress-bar" style="height:100%;width:0%;background:var(--dsw-alias-brand-primary,#3964fe);border-radius:2px;transition:width .25s cubic-bezier(.4,0,.2,1);"></div>
+                        </div>
+                    </div>
+                    <div id="ds-log" class="ds-log-area"></div>
+                </div>
+
+                <div class="ds-tab-pane" data-pane="action">
+                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
+                    </label>
+                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却（连续10次后暂停）
+                    </label>
+                    <div style="display:flex;gap:6px;">
+                        <button id="ds-pause-btn" class="ds-btn ds-btn-secondary" style="flex:1;">暂停执行</button>
+                        <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger" style="flex:1;">断开连接</button>
                     </div>
                 </div>
-                <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                    <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
-                </label>
-                <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                    <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却（连续10次后暂停）
-                </label>
-                <div style="display:flex;gap:6px;">
-                    <button id="ds-pause-btn" class="ds-btn ds-btn-secondary" style="flex:1;">暂停执行</button>
-                    <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger" style="flex:1;">断开连接</button>
-                </div>
-                <div id="ds-log" class="ds-log-area"></div>
-            </div>`;
-        newChatBtn.parentNode.insertBefore(panel, newChatBtn.nextSibling);
+            </div>
+            <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary" style="width:100%;">插件管理</button>`;
+        // ===== 模式挂载：侧边栏 / 悬浮三窗口 =====
+        function fwLoadRect(key, def) {
+            const r = Object.assign({}, def);
+            r.left = Math.max(0, Math.min(window.innerWidth - 80, Number(r.left) || 0));
+            r.top = Math.max(0, Math.min(window.innerHeight - 40, Number(r.top) || 0));
+            return r;
+        }
+        function fwSaveRects() { /* 不持久化窗口位置与尺寸，刷新后回到默认 */ }
+        // 把单个浮窗拉回可视区：保证标题栏（约 80x40）至少有一部分可点到
+        function fwClampOne(w) {
+            if (!w || !w.isConnected || w.style.display === "none") return;
+            const r = w.getBoundingClientRect();
+            const vw = window.innerWidth, vh = window.innerHeight;
+            const keepW = Math.min(80, r.width), keepH = Math.min(40, r.height);
+            let left = r.left, top = r.top;
+            if (left > vw - keepW) left = vw - keepW;
+            if (left < 0) left = 0;
+            if (top > vh - keepH) top = vh - keepH;
+            if (top < 0) top = 0;
+            if (left !== r.left) w.style.left = left + "px";
+            if (top !== r.top) w.style.top = top + "px";
+        }
+        function fwClampAll() {
+            fwClampOne(panel);
+            fwClampOne(document.getElementById("ds-fw-interject"));
+            fwClampOne(document.getElementById("ds-fw-log"));
+        }
+        function fwDrag(win, handle) {
+            if (!win || !handle || handle._dsDragBound) return;
+            handle._dsDragBound = true;
+            let dragging = false, sx = 0, sy = 0, sl = 0, st = 0;
+            handle.style.cursor = "grab";
+            handle.addEventListener("mousedown", (e) => {
+                if (e.target.closest("button, input, select, textarea")) return;
+                dragging = true;
+                const r = win.getBoundingClientRect();
+                sl = r.left; st = r.top; sx = e.clientX; sy = e.clientY;
+                handle.style.cursor = "grabbing";
+                e.preventDefault();
+            });
+            window.addEventListener("mousemove", (e) => {
+                if (!dragging) return;
+                win.style.left = Math.max(0, Math.min(window.innerWidth - 80, sl + (e.clientX - sx))) + "px";
+                win.style.top = Math.max(0, Math.min(window.innerHeight - 40, st + (e.clientY - sy))) + "px";
+            });
+            window.addEventListener("mouseup", () => {
+                if (!dragging) return;
+                dragging = false;
+                handle.style.cursor = "grab";
+                try { fwSaveRects(); } catch (e) {}
+            });
+        }
+        function fwEnsure(id, title, resizeMode, defRect) {
+            let win = document.getElementById(id);
+            if (!win) {
+                win = document.createElement("div");
+                win.id = id;
+                win.className = "ds-fw";
+                const head = document.createElement("div");
+                head.className = "ds-fw-head";
+                const titleSpan = document.createElement("span");
+                titleSpan.textContent = title;
+                head.appendChild(titleSpan);
+                const minB = document.createElement("button");
+                minB.className = "ds-fw-min";
+                minB.innerHTML = I.min;
+                minB.title = "最小化";
+                head.appendChild(minB);
+                const body = document.createElement("div");
+                body.className = "ds-fw-body";
+                win.appendChild(head);
+                win.appendChild(body);
+                document.body.appendChild(win);
+
+                minB.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const on = win.classList.toggle("ds-fw-minimized");
+                    minB.innerHTML = on ? I.restore : I.min;
+                    minB.title = on ? "还原" : "最小化";
+                });
+                minB.addEventListener("mousedown", (e) => e.stopPropagation());
+            }
+            win.style.resize = resizeMode;
+            const r = fwLoadRect(id, defRect);
+            win.style.left = r.left + "px";
+            win.style.top = r.top + "px";
+            win.style.width = r.width + "px";
+            // autoHeight：高度交给内容决定（如插话窗口），不写死
+            if (defRect && defRect.autoHeight) win.style.height = "auto";
+            else win.style.height = r.height + "px";
+            return win;
+        }
+        function fwBuild() {
+            if (panel.parentNode !== document.body) document.body.appendChild(panel);
+            panel.classList.add("ds-fw-panel");
+            const ar = fwLoadRect("action", { left: Math.max(8, window.innerWidth - 272), top: 80, width: 248 });
+            panel.style.left = ar.left + "px";
+            panel.style.top = ar.top + "px";
+            panel.style.width = ar.width + "px";
+            // 高度完全交给内容（CSS height:auto !important），这里不写死
+            fwDrag(panel, document.getElementById("ds-panel-head"));
+
+            const wi = fwEnsure("ds-fw-interject", "插话", "horizontal",
+                { left: Math.max(8, window.innerWidth - 272), top: ar.top + 320, width: 248, height: 150, autoHeight: true });
+            fwDrag(wi, wi.querySelector(".ds-fw-head"));
+            const bi = wi.querySelector(".ds-fw-body");
+            const input = document.getElementById("ds-interject-input");
+            const row = input ? input.parentElement : null;
+            if (row && row.parentNode !== bi) bi.appendChild(row);
+            const pend = document.getElementById("ds-interject-pending");
+            if (pend && pend.parentNode !== bi) bi.appendChild(pend);
+
+            const wl = fwEnsure("ds-fw-log", "日志", "both",
+                { left: Math.max(8, window.innerWidth - 272), top: ar.top + 480, width: 248, height: 300 });
+            fwDrag(wl, wl.querySelector(".ds-fw-head"));
+            const bl = wl.querySelector(".ds-fw-body");
+            const pw = document.getElementById("ds-progress-wrap");
+            if (pw && pw.parentNode !== bl) bl.appendChild(pw);
+            const lg = document.getElementById("ds-log");
+            if (lg && lg.parentNode !== bl) bl.appendChild(lg);
+
+            if (!window._dsFwResizeBound) {
+                window._dsFwResizeBound = true;
+                window.addEventListener("resize", () => {
+                    if (panelMode === "float") { try { fwClampAll(); } catch (e) {} }
+                });
+            }
+        }
+        function fwTeardown() {
+            panel.classList.remove("ds-fw-panel");
+            // 切回侧栏时解除最小化（侧栏不提供最小化按钮，避免卡在折叠态无法还原）
+            if (panel.classList.contains("ds-minimized")) {
+                panel.classList.remove("ds-minimized");
+                const mb = document.getElementById("ds-min-btn");
+                if (mb) { mb.innerHTML = I.min; mb.title = "最小化"; }
+            }
+            panel.style.left = panel.style.top = panel.style.width = panel.style.height = "";
+            const paneI = panel.querySelector(".ds-tab-pane[data-pane=\"interject\"]");
+            const wi = document.getElementById("ds-fw-interject");
+            if (paneI && wi) {
+                const bi = wi.querySelector(".ds-fw-body");
+                while (bi.firstChild) paneI.appendChild(bi.firstChild);
+                wi.remove();
+            }
+            const paneL = panel.querySelector(".ds-tab-pane[data-pane=\"log\"]");
+            const wl = document.getElementById("ds-fw-log");
+            if (paneL && wl) {
+                const bl = wl.querySelector(".ds-fw-body");
+                while (bl.firstChild) paneL.appendChild(bl.firstChild);
+                wl.remove();
+            }
+        }
+        function mountPanel() {
+            if (panelMode === "float") {
+                try { fwBuild(); } catch (e) { log("构建悬浮窗口失败: " + ((e && e.message) || e)); }
+                return true;
+            }
+            fwTeardown();
+            const anchor = findNewChatButton();
+            if (!anchor) return false;
+            if (panel.parentNode !== anchor.parentNode) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+            return true;
+        }
+        mountPanel();
 
         const $ = (id) => document.getElementById(id);
         const dot = $('ds-dot'), statusEl = $('ds-status'), logEl = $('ds-log');
@@ -2378,6 +3170,41 @@ ${getPluginsPrompt()}
         const autoToggle = $('ds-auto-toggle');
         const throttleToggle = $('ds-throttle-toggle');
         const pauseBtn = $('ds-pause-btn');
+        const pluginMenuBtn = $('ds-plugin-menu-btn');
+        if (pluginMenuBtn) pluginMenuBtn.addEventListener('click', () => {
+            try { openPluginManager(); } catch (e) { showToast('error', '打开插件管理失败: ' + e.message, 3000); }
+        });
+
+        // ===== 最小化按钮 =====
+        const minBtn = $("ds-min-btn");
+        if (minBtn) {
+            minBtn.innerHTML = I.min;
+            minBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const on = panel.classList.toggle("ds-minimized");
+                minBtn.innerHTML = on ? I.restore : I.min;
+                minBtn.title = on ? "还原" : "最小化";
+            });
+        }
+
+        // ===== 模式切换按钮 =====
+        const modeBtn = $("ds-mode-btn");
+        if (modeBtn) {
+            modeBtn.textContent = panelMode === "float" ? "侧栏" : "悬浮";
+            modeBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const next = panelMode === "float" ? "sidebar" : "float";
+                if (next === "sidebar" && !findNewChatButton()) {
+                    showToast("warning", "未找到侧边栏锚点，已保持悬浮模式", 3000);
+                    return;
+                }
+                panelMode = next;
+                try { localStorage.setItem("ds_panel_mode", panelMode); } catch (e2) {}
+                modeBtn.textContent = panelMode === "float" ? "侧栏" : "悬浮";
+                try { mountPanel(); } catch (e3) { log("切换模式失败: " + ((e3 && e3.message) || e3)); }
+            });
+        }
+
         const recentSelect = $('ds-recent-select');
 
         window.dsLog = (msg) => {
@@ -2575,7 +3402,7 @@ ${getPluginsPrompt()}
 
                 if (startMode === 'here') {
                     log('启动方式: 当前对话内开始');
-                    // 快照：启动时页面上已存在的消息，其工具调用一律不再执行（防刷新后重跑历史）
+                    // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防刷新后重跑历史）
                     ignoreKeys.clear();
                     pickAll(SEL.virtualItem).forEach(el => {
                         const k = el.getAttribute('data-virtual-list-item-key');
@@ -2679,56 +3506,130 @@ ${getPluginsPrompt()}
         return true;
     }
 
-    function injectCompressBtn() {
-        if (document.getElementById('ds-compress-btn-wrapper')) return;
+    // 技能列表（汉堡菜单）：汇总所有插件通过 ui.skill 注册的技能项
+    // 结构：{ id, name, plugin, desc, onClick }
+    function injectSkillBtn() {
+        if (document.getElementById('ds-skill-btn-wrapper')) return;
         const sendBtn = pick(SEL.sendBtn);
         if (!sendBtn) return;
         const toolbar = pick(SEL.toolbar) || sendBtn.closest('div')?.parentElement;
         if (!toolbar) return;
-        toolbar.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:10px;';
+        toolbar.style.cssText = 'display:flex;flex-direction:row;align-items:center;gap:6px;';
 
         const wrapper = document.createElement('div');
-        wrapper.id = 'ds-compress-btn-wrapper';
+        wrapper.id = 'ds-skill-btn-wrapper';
         const btn = document.createElement('button');
-        btn.className = 'ds-compress-btn';
-        btn.innerHTML = `${I.arrow}<span>压缩并转移</span>`;
+        btn.className = 'ds-skill-btn';
+        btn.title = '技能列表';
+        btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" style="display:block;flex-shrink:0;"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span>技能列表</span>';
 
-        btn.addEventListener('click', async () => {
-            if (!isModeOn) return alert('请先开启本地互联模式');
-            if (btn.disabled) return;
-            btn.disabled = true;
-            btn.innerHTML = `${I.spinner}<span>压缩中...</span>`;
-            isCompressing = true;
-            try {
-                const prompt = `【系统指令：上下文压缩】\n请将我们之前的所有对话、代码逻辑、工作进度进行提炼。用 Markdown 格式输出一份详尽的状态摘要，包含：\n1. 当前工作绝对路径\n2. 核心文件用途及关键代码\n3. 已完成/未完成任务\n4. 下一步建议操作\n请直接输出摘要。`;
-                const r = await sendMessage(prompt);
-                if (!r.ok) { alert('发送失败: ' + r.reason); return; }
-                await waitForAIResponse();
-                const item = getLatestAssistantItem();
-                if (!item) return;
-                const c = pick(SEL.assistantContent, item);
-                const summary = c ? (c.innerText || '') : '';
-                const newChatBtn = Array.from(document.querySelectorAll('span'))
-                    .find(el => el.textContent.trim() === '开启新对话')?.closest('[tabindex="0"]');
-                if (newChatBtn) {
-                    newChatBtn.click();
-                    setTimeout(async () => {
-                        msgStore.clear();
-        toolcallStatusMap.clear();
-                        currentChatUrl = location.href;
-                        await sendMessage(getInitPrompt(absPath, "【前情提要：历史对话压缩摘要】\n" + summary + "\n\n请阅读上述摘要，了解工作进度。接下来请告诉我你想从哪里继续？"));
-                    }, 1500);
+        const pop = document.createElement('div');
+        pop.className = 'ds-skill-pop';
+        pop.style.display = 'none';
+        document.body.appendChild(pop);
+
+        function placePop() {
+            const r = btn.getBoundingClientRect();
+            pop.style.display = 'block';
+            const ph = pop.offsetHeight;
+            const pw = pop.offsetWidth;
+            let top = r.top - ph - 8;
+            if (top < 8) top = r.bottom + 8;
+            let left = r.left;
+            if (left + pw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - pw - 8);
+            pop.style.top = top + 'px';
+            pop.style.left = left + 'px';
+        }
+
+        function renderPop() {
+            const skills = (W.DS_UI_Slots && W.DS_UI_Slots.skills) || [];
+            let h = '<div class="ds-skill-pop-title">技能列表</div>';
+            if (!skills.length) {
+                h += '<div class="ds-skill-empty">暂无可用技能。插件可通过 ui.skill 注册。</div>';
+            } else {
+                for (const s of skills) {
+                    h += '<div class="ds-skill-item" data-sid="' + esc(s.id) + '">' +
+                         '<div class="sk-name">' + esc(s.name) + '</div>' +
+                         (s.plugin ? '<span class="sk-plugin">来自 ' + esc(s.plugin) + '</span>' : '') +
+                         (s.desc ? '<div class="sk-desc">' + esc(s.desc) + '</div>' : '') +
+                         '</div>';
                 }
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = `${I.arrow}<span>压缩并转移</span>`;
-                isCompressing = false;
+            }
+            pop.innerHTML = h;
+        }
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (pop.style.display === 'none') {
+                renderPop();
+                placePop();
+            } else {
+                pop.style.display = 'none';
             }
         });
+
+        pop.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const item = e.target.closest('.ds-skill-item');
+            if (!item) return;
+            const sid = item.getAttribute('data-sid');
+            const skills = (W.DS_UI_Slots && W.DS_UI_Slots.skills) || [];
+            const sk = skills.find(s => s.id === sid);
+            if (!sk) return;
+            pop.style.display = 'none';
+            try {
+                await Promise.resolve(sk.onClick(item));
+            } catch (err) {
+                showToast('error', '技能执行出错: ' + (err && err.message || err), 4000);
+            }
+        });
+
+        document.addEventListener('click', () => { pop.style.display = 'none'; }, true);
 
         wrapper.appendChild(btn);
         const sendWrapper = sendBtn.closest('div[style="width: fit-content;"]') || sendBtn;
         toolbar.insertBefore(wrapper, sendWrapper);
+    }
+
+    // 内置技能：压缩上下文并转移（原压缩按钮，下沉为技能项）
+    function registerBuiltinSkills() {
+        if (!W.DS_UI_Slots || !W.DS_UI_Slots.addSkill) return;
+        W.DS_UI_Slots.addSkill({
+            id: 'builtin_compress',
+            name: '压缩上下文并转移',
+            plugin: '内置',
+            desc: '将当前对话提炼成状态摘要，开启新对话并携带摘要继续，缓解上下文过长。',
+            onClick: async () => {
+                if (!isModeOn) { showToast('warning', '请先开启本地互联模式', 3000); return; }
+                if (isCompressing) return;
+                isCompressing = true;
+                dsSetStatus('working', '压缩中');
+                try {
+                    const prompt = '【系统指令：上下文压缩】\n请将我们之前的所有对话、代码逻辑、工作进度进行提炼。用 Markdown 格式输出一份详尽的状态摘要，包含：\n1. 当前工作绝对路径\n2. 核心文件用途及关键代码\n3. 已完成/未完成任务\n4. 下一步建议操作\n请直接输出摘要。';
+                    const r = await sendMessage(prompt);
+                    if (!r.ok) { showToast('error', '发送失败: ' + r.reason, 4000); return; }
+                    await waitForAIResponse();
+                    const item = getLatestAssistantItem();
+                    if (!item) return;
+                    const c = pick(SEL.assistantContent, item);
+                    const summary = c ? (c.innerText || '') : '';
+                    const newChatBtn = Array.from(document.querySelectorAll('span'))
+                        .find(el => el.textContent.trim() === '开启新对话')?.closest('[tabindex="0"]');
+                    if (newChatBtn) {
+                        newChatBtn.click();
+                        setTimeout(async () => {
+                            msgStore.clear();
+                            toolcallStatusMap.clear();
+                            currentChatUrl = location.href;
+                            await sendMessage(getInitPrompt(absPath, '【前情提要：历史对话压缩摘要】\n' + summary + '\n\n请阅读上述摘要，了解工作进度。接下来请告诉我你想从哪里继续？'));
+                        }, 1500);
+                    }
+                } finally {
+                    isCompressing = false;
+                    if (isModeOn) dsSetStatus('active', '监听中');
+                }
+            },
+        });
     }
 
     // ===== 插件 UI 挂载系统 =====
@@ -2737,7 +3638,8 @@ ${getPluginsPrompt()}
     // W.DS_UI_Slots.addToggle({ id, label, defaultOn, onChange, slot: 'toggle' })
     W.DS_UI_Slots = W.DS_UI_Slots || (function () {
         const buttons = [];   // { id, label, icon, title, onClick, slot, el }
-        const toggles = [];   // { id, label, defaultOn, onChange, state, el }
+const toggles = [];   // { id, label, defaultOn, onChange, state, el }
+const skills = [];    // { id, name, plugin, desc, onClick } 汉堡菜单技能项
         function addButton(cfg) {
             if (!cfg || !cfg.id) throw new Error('addButton 需要 id');
             if (buttons.find(b => b.id === cfg.id)) return false;
@@ -2754,11 +3656,20 @@ ${getPluginsPrompt()}
             scheduleInject();
             return true;
         }
+function addSkill(cfg) {
+            if (!cfg || !cfg.id || typeof cfg.onClick !== 'function') throw new Error('addSkill 需要 id 和 onClick');
+            if (skills.find(s => s.id === cfg.id)) return false;
+            skills.push({ id: cfg.id, name: cfg.name || cfg.id, plugin: cfg.plugin || '', desc: cfg.desc || '', onClick: cfg.onClick });
+            scheduleInject();
+            return true;
+        }
         function removeItem(id) {
             let i = buttons.findIndex(b => b.id === id);
             if (i >= 0) { const b = buttons[i]; if (b.el && b.el.parentNode) b.el.remove(); buttons.splice(i, 1); return true; }
             i = toggles.findIndex(t => t.id === id);
             if (i >= 0) { const t = toggles[i]; if (t.el && t.el.parentNode) t.el.remove(); toggles.splice(i, 1); return true; }
+i = skills.findIndex(s => s.id === id);
+            if (i >= 0) { skills.splice(i, 1); return true; }
             return false;
         }
         // 开关状态持久化
@@ -2807,7 +3718,7 @@ ${getPluginsPrompt()}
             _scheduled = true;
             setTimeout(() => { _scheduled = false; try { injectPluginUI(); } catch (e) { log('插件UI注入异常: ' + e.message); } }, 100);
         }
-        return { addButton, addToggle, removeItem, setToggle, list, buttons, toggles, _loadToggleState: loadToggleState, _persistToggle: persistToggle, _scheduleInject: scheduleInject };
+return { addButton, addToggle, addSkill, removeItem, setToggle, list, buttons, toggles, skills, _loadToggleState: loadToggleState, _persistToggle: persistToggle, _scheduleInject: scheduleInject };
     })();
 
     function injectPluginUI() {
@@ -2829,7 +3740,7 @@ ${getPluginsPrompt()}
                     if (b.slot !== 'toolbar') return;
                     if (b.el && b.el.parentNode) return;
                     const btn = document.createElement('button');
-                    btn.className = 'ds-compress-btn';
+                    btn.className = 'ds-plugin-btn';
                     btn.style.cssText = 'height:34px;font-size:13px;';
                     if (b.title) btn.title = b.title;
                     btn.innerHTML = (b.icon || '') + (b.label ? '<span>' + esc(b.label) + '</span>' : '');
@@ -2907,18 +3818,91 @@ ${getPluginsPrompt()}
     }
 
     setInterval(() => {
-        if (findNewChatButton()) {
+        // 悬浮模式不依赖侧边栏锚点，随时可注入；侧边栏模式仍需等锚点出现
+        if (panelMode === 'float' || findNewChatButton()) {
             injectUI();
-            injectCompressBtn();
+registerBuiltinSkills();
+injectSkillBtn();
             try { injectPluginUI(); } catch (e) {}
         }
     }, 1000);
 
     // 未开启互联模式时，也扫描并折叠页面上已加载的对话内容（只做展示，不执行任何工具）
-    setInterval(() => {
+    const passiveScan = () => {
         if (isModeOn) return;
         try { hideToolResultMessages(); } catch (e) {}
         try { foldAllToolcalls(); } catch (e) {}
-    }, 2000);
+    };
+    // 刷新后立即执行一次（不等虚拟列表），再用 200ms / 800ms 双段补齐渲染延迟
+    passiveScan();
+    setTimeout(passiveScan, 200);
+    setInterval(passiveScan, 800);
+
+    // ===== 「消息发送过于频繁」自动重试（精确定位版）=====
+    // 真实 DOM 结构（来自实际页面）：
+    //   <div class="d29f3d7d ds-message" data-ds-hidden="true">
+    //     <div class="fbb737a4">结果文本</div>
+    //     <div role="button" class="ds-button ds-button--warning ds-button--filled ds-button--circle ...">
+    //       <svg>循环箭头</svg>   ← 重试按钮在这里
+    //     </div>
+    //   </div>
+    //   <div class="_11d6b3a"><span>消息发送过于频繁，请稍后重试</span>...</div>
+    //
+    // 关键教训：重试按钮「不在」频繁文案的子树里，而是同级（前一个消息块里）。
+    // 从文案向上爬父节点找 role=button，会先撞到文案块里的「复制」按钮 —— 之前点错就错在这。
+    // 正确做法：直接按语义类名取 warning 圆形按钮，再用所在块文本校验是否为频繁提示。
+    const FREQ_RETRY_MS = 10000; // 两次点击最小间隔（10 秒）
+    const FREQ_SCAN_MS = 1000;   // 扫描间隔
+    const FREQ_TEXT_RE = /消息发送过于频繁|发送过于频繁|请稍后重试|too many requests|rate limit/i;
+    let freqLastClick = 0;
+    let freqClickCount = 0;
+
+    function fireRealClick(el) {
+        if (!el) return;
+        let r = { left: 0, top: 0, width: 0, height: 0 };
+        try { r = el.getBoundingClientRect() || r; } catch (e) {}
+        const x = Math.round((r.left || 0) + (r.width || 0) / 2) || 8;
+        const y = Math.round((r.top || 0) + (r.height || 0) / 2) || 8;
+        const PE = W.PointerEvent || MouseEvent;
+        const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
+        for (const type of types) {
+            try {
+                const Ev = type.indexOf('pointer') === 0 ? PE : MouseEvent;
+                el.dispatchEvent(new Ev(type, {
+                    bubbles: true, cancelable: true, composed: true,
+                    view: window, clientX: x, clientY: y, button: 0, buttons: 1
+                }));
+            } catch (e) {}
+        }
+        try { if (typeof el.click === 'function') el.click(); } catch (e) {}
+    }
+
+    // 返回当前需要点击的「重试」按钮；没有频繁提示或找不到按钮时返回 null
+    function findFreqRetryButton() {
+        const btns = document.querySelectorAll('div[role="button"].ds-button--warning.ds-button--circle');
+        if (!btns.length) return null;
+        // 从后往前找（最新的提示在页面底部）
+        for (let i = btns.length - 1; i >= 0; i--) {
+            const btn = btns[i];
+            const scope = btn.closest('[data-virtual-list-item-key]') || btn.parentElement;
+            const txt = scope ? (scope.textContent || '') : '';
+            if (FREQ_TEXT_RE.test(txt)) return btn;
+        }
+        return null;
+    }
+
+    setInterval(() => {
+        try {
+            const btn = findFreqRetryButton();
+            if (!btn) return; // 没有频繁提示：不动作
+            const now = Date.now();
+            if (now - freqLastClick < FREQ_RETRY_MS) return; // 未到 10 秒，等待
+            freqLastClick = now;
+            freqClickCount++;
+            fireRealClick(btn);
+            log('检测到「消息发送过于频繁」，已点击重试按钮（第 ' + freqClickCount + ' 次）');
+            try { showToast?.('warning', '发送频繁，已自动重试', 2500); } catch (e) {}
+        } catch (e) { log('频繁重试监控异常: ' + ((e && e.message) || e)); }
+    }, FREQ_SCAN_MS);
 
 })();

@@ -2,7 +2,10 @@ const { exec } = require('child_process');
 
 module.exports = {
     name: 'wifi_info',
-    description: '获取本机 Wi-Fi 信息。参数：action(list 列出保存的 Wi-Fi 及密码 / current 查看当前连接的 Wi-Fi)。',
+    description: "获取本机 Wi-Fi 信息",
+    params: [
+        { k: "action", cn: "操作", req: true, d: "list 列出保存的 Wi-Fi / current 当前连接" }
+    ],
     execute: async (args) => {
         const action = (args.action || args.extraArgs?.action || 'current').toLowerCase();
         return new Promise((resolve) => {
@@ -16,7 +19,8 @@ module.exports = {
                 exec('netsh wlan show profiles', { timeout: 5000, windowsHide: true }, (err, stdout) => {
                     if (err) return resolve('获取列表失败: ' + err.message);
                     const profiles = [];
-                    const re = /All User Profile\s*:\s*(.+)/gi;
+                    // 兼容中英文系统：英文 "All User Profile" / 中文 "所有用户配置文件"，冒号兼容全角
+                    const re = /(?:All User Profile|所有用户配置文件)\s*[:：]\s*(.+)/gi;
                     let m;
                     while ((m = re.exec(stdout)) !== null) profiles.push(m[1].trim());
                     
@@ -27,7 +31,8 @@ module.exports = {
                     profiles.forEach(name => {
                         exec(`netsh wlan show profile name="${name}" key=clear`, { timeout: 5000, windowsHide: true }, (e2, stdout2) => {
                             let pwd = '无密码/未存储';
-                            const pM = stdout2.match(/Key Content\s*:\s*(.+)/i);
+                            // 英文 "Key Content" / 中文 "关键内容"（注意"密码"行是加密方式，不能匹配）
+                            const pM = (stdout2 || '').match(/(?:Key Content|关键内容)\s*[:：]\s*(.+)/i);
                             if (pM) pwd = pM[1].trim();
                             out += `- ${name}  |  密码: ${pwd}\n`;
                             if (--pending === 0) resolve(out.trim());

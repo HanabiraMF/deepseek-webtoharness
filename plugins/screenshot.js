@@ -16,7 +16,10 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'screenshot',
-    description: '截取当前主屏幕并保存为工作区内的 png，返回相对路径（可配合 image 工具直接查看）。参数：filename(可选)。',
+    description: "截取主屏幕保存为 png；要让 AI 看到画面需再 attach 该文件",
+    params: [
+        { k: "filename", cn: "文件名", req: false, d: "默认 screenshot_时间戳.png" }
+    ],
     execute: async (args) => {
         const filename = (V(args, 'filename') || ('screenshot_' + Date.now() + '.png')).replace(/[<>:"|?*]/g, '_');
         const absPath = await resolveWsPath(filename);
@@ -45,7 +48,7 @@ module.exports = {
                 if (err) return resolve('截图失败: ' + (stderr || err.message));
                 if (fs.existsSync(absPath)) {
                     const kb = (fs.statSync(absPath).size / 1024).toFixed(1);
-                    resolve('截图成功：' + filename + '（' + kb + 'KB）。如需查看请调用 image 工具。');
+                    resolve('截图成功：' + filename + '（' + kb + 'KB）。展示给用户看可调用 image；要让 AI 自己看到画面，请用 attach 把该文件送进对话。');
                 } else {
                     resolve('命令已执行但未生成文件，可能缺少屏幕访问权限。');
                 }

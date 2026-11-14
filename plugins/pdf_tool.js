@@ -16,13 +16,10 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'pdf_tool',
-    description: `
-提取 PDF 文件的纯文本内容。如果缺少依赖库会自动尝试安装。
-【参数】
-- path: PDF 文件的相对路径。
-【示例】
-{"op":"pdf_tool","path":"document.pdf"}
-`,
+    description: "提取 PDF 文件的纯文本内容",
+    params: [
+        { k: "path", cn: "PDF 路径", req: true, d: "" }
+    ],
     execute: async (args) => {
         const p = V(args, 'path');
         if (!p) return '错误：缺少 path';

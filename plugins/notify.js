@@ -15,7 +15,11 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'notify',
-    description: '弹出系统级桌面通知。参数：title(标题), message(内容)',
+    description: "弹出系统桌面通知",
+    params: [
+        { k: "title", cn: "标题", req: true, d: "" },
+        { k: "message", cn: "内容", req: true, d: "" }
+    ],
     execute: async (args) => {
         const title = (V(args, 'title') || 'DeepSeek 本地智能体').replace(/["'`]/g, ' ');
         const msg = (V(args, 'message') || '任务完成').replace(/["'`]/g, ' ');

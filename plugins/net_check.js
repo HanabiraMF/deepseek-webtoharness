@@ -12,7 +12,10 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'net_check',
-    description: '查看端口占用或网络连接。参数：port(可选，查指定端口，如 39999)，不传则返回前若干条监听端口。',
+    description: "查看端口占用或网络连接",
+    params: [
+        { k: "port", cn: "端口", req: false, d: "查指定端口，不传返回监听端口列表" }
+    ],
     execute: async (args) => {
         const port = V(args, 'port').replace(/[^0-9]/g, '');
         return new Promise((resolve) => {

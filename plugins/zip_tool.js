@@ -14,7 +14,12 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'zip_tool',
-    description: '压缩或解压。参数：action(compress 压缩 / extract 解压)，source(源路径)，target(目标路径)。',
+    description: "压缩或解压文件",
+    params: [
+        { k: "action", cn: "操作", req: true, d: "compress / extract" },
+        { k: "source", cn: "源路径", req: true, d: "" },
+        { k: "target", cn: "目标路径", req: true, d: "" }
+    ],
     execute: async (args) => {
         const action = V(args, 'action').trim().toLowerCase();
         const source = V(args, 'source').trim();

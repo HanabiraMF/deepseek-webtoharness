@@ -327,11 +327,38 @@ const server = http.createServer(async (req, res) => {
                 });
                 return items.length ? items.join('\n') : '(空目录)';
             }
-            function doOpenfile(p, offset, limit) {
+            function doOpenfile(p, offset, limit, line, lines, lineEnd) {
                 const abs = safe(p);
                 if (!fs.existsSync(abs)) throw new Error('文件不存在: ' + p);
                 if (fs.statSync(abs).isDirectory()) throw new Error(`"${p}" 是目录`);
                 const text = fs.readFileSync(abs, 'utf8');
+
+                // ===== 行模式：只要给了 line / lines / lineEnd 任一，就按行读取并带行号 =====
+                const hasLineMode = (line != null && line !== '') || (lines != null && lines !== '') || (lineEnd != null && lineEnd !== '');
+                if (hasLineMode) {
+                    const allLines = text.split(/\r?\n/);
+                    const totalLines = allLines.length;
+                    let from = parseInt(line, 10);
+                    if (!Number.isFinite(from) || from < 1) from = 1;
+                    let to;
+                    const le = parseInt(lineEnd, 10);
+                    const ln = parseInt(lines, 10);
+                    if (Number.isFinite(le) && le >= from) to = Math.min(le, totalLines);
+                    else if (Number.isFinite(ln) && ln > 0) to = Math.min(from + ln - 1, totalLines);
+                    else to = Math.min(from + 199, totalLines); // 默认最多 200 行
+                    if (from > totalLines) {
+                        return `文件 ${p}（共 ${totalLines} 行）: line=${from} 已超出文件行数`;
+                    }
+                    const picked = [];
+                    const width = String(to).length;
+                    for (let i = from; i <= to; i++) {
+                        picked.push(String(i).padStart(width, ' ') + ' | ' + allLines[i - 1]);
+                    }
+                    const more = to < totalLines;
+                    const head = `文件 ${p}（第 ${from}-${to} 行 / 共 ${totalLines} 行${more ? `，未完，可设 line=${to + 1} 继续读` : ''}）:`;
+                    return `${head}\n\`\`\`\n${picked.join('\n')}\n\`\`\``;
+                }
+
                 const total = text.length;
                 let start = parseInt(offset, 10);
                 if (!Number.isFinite(start) || start < 0) start = 0;
@@ -859,7 +886,7 @@ const server = http.createServer(async (req, res) => {
             }
             switch (op) {
                 case 'listdir': result = doListdir(body.path || '.', body.tree); break;
-                case 'openfile': result = doOpenfile(body.path, body.offset, body.limit); break;
+                case 'openfile': result = doOpenfile(body.path, body.offset, body.limit, body.line, body.lines, body.lineEnd); break;
                 case 'read': result = doRead(body.path); break;
                 case 'mkdir': result = doMkdir(body.path); break;
                 case 'writefile': result = doWritefile(body.path, body.content); break;
@@ -935,13 +962,92 @@ const server = http.createServer(async (req, res) => {
     }
 
     if ((req.method === 'POST' || req.method === 'GET') && pathname === '/plugins/list') {
-        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description }));
+        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description, params: p.params || [] }));
         return sendJson(res, 200, { plugins: list });
+    }
+
+    // 直接挂载插件：AI 只需给出 name + code，路径/写文件/热加载/校验全部由服务端完成
+    if (req.method === 'POST' && pathname === '/plugins/write') {
+        try {
+            const body = JSON.parse(await readBody(req) || '{}');
+            let name = String(body.name || '').trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+            let code = body.code;
+
+            // 支持 source：从工作区文件读取代码（避免大段代码塞进 XML 被截断）
+            if ((typeof code !== 'string' || !code.trim()) && body.source) {
+                try {
+                    const srcAbs = path.resolve(WORKSPACE, String(body.source));
+                    if (!srcAbs.startsWith(WORKSPACE)) return sendJson(res, 400, { error: 'source 路径越界' });
+                    if (!fs.existsSync(srcAbs)) return sendJson(res, 400, { error: 'source 文件不存在: ' + body.source });
+                    code = fs.readFileSync(srcAbs, 'utf8');
+                } catch (e) {
+                    return sendJson(res, 400, { error: '读取 source 失败: ' + e.message });
+                }
+            }
+
+            if (!name) return sendJson(res, 400, { error: '缺少或非法的 name（只允许小写字母/数字/下划线）' });
+            if (typeof code !== 'string' || !code.trim()) return sendJson(res, 400, { error: '缺少 code 或 source' });
+
+            const file = name + '.js';
+            const abs = path.join(PLUGINS_DIR, file);
+            // 禁止覆盖内部共享模块
+            if (name === '_workspace') return sendJson(res, 400, { error: '不能覆盖内部模块 _workspace' });
+
+            // 语法预检：避免写入后 require 报错留下坏文件
+            try {
+                new (require('vm').Script)(code, { filename: file });
+            } catch (e) {
+                return sendJson(res, 400, { error: '语法错误: ' + e.message });
+            }
+
+            const existed = fs.existsSync(abs);
+            if (existed) {
+                try { fs.copyFileSync(abs, abs + '.bak'); } catch (e) {}
+            }
+            fs.writeFileSync(abs, code, 'utf8');
+
+            // 热加载并校验
+            delete require.cache[require.resolve(abs)];
+            let plugin;
+            try {
+                plugin = require(abs);
+            } catch (e) {
+                // 加载失败：回滚（或删除新文件），不留坏插件
+                if (existed) {
+                    try { fs.copyFileSync(abs + '.bak', abs); delete require.cache[require.resolve(abs)]; } catch (e2) {}
+                } else {
+                    try { fs.unlinkSync(abs); } catch (e2) {}
+                }
+                return sendJson(res, 400, { error: '插件加载失败: ' + (e.message || String(e)) });
+            }
+            if (!plugin || typeof plugin.execute !== 'function') {
+                if (existed) { try { fs.copyFileSync(abs + '.bak', abs); } catch (e2) {} }
+                else { try { fs.unlinkSync(abs); } catch (e2) {} }
+                return sendJson(res, 400, { error: '插件必须导出 { name, description, execute }' });
+            }
+            if (plugin.name !== name) {
+                if (existed) { try { fs.copyFileSync(abs + '.bak', abs); } catch (e2) {} }
+                else { try { fs.unlinkSync(abs); } catch (e2) {} }
+                return sendJson(res, 400, { error: `插件内部 name "${plugin.name}" 与文件名 "${name}" 不一致` });
+            }
+
+            serverPlugins[name] = plugin;
+            const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description, params: p.params || [] }));
+            return sendJson(res, 200, {
+                success: true,
+                action: existed ? 'updated' : 'created',
+                name,
+                file: 'plugins/' + file,
+                plugins: list
+            });
+        } catch (e) {
+            return sendJson(res, 500, { error: e.message || String(e) });
+        }
     }
 
     if (req.method === 'POST' && pathname === '/plugins/reload') {
         loadServerPlugins();
-        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description }));
+        const list = Object.values(serverPlugins).map(p => ({ name: p.name, description: p.description, params: p.params || [] }));
         return sendJson(res, 200, { success: true, plugins: list });
     }
 

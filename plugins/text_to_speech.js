@@ -15,15 +15,12 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'text_to_speech',
-    description: `
-使用 Windows 系统内置的 TTS 引擎将文字转为语音朗读出来。
-【参数】
-- text: 要朗读的文字内容（支持中文）
-- rate: (可选) 语速，范围 -10 到 10，默认 0
-- volume: (可选) 音量，范围 0 到 100，默认 100
-【示例】
-{"op":"text_to_speech","text":"你好，我是你的本地智能体，任务已经执行完毕。"}
-`,
+    description: "文字转语音朗读，使用 Windows 内置 TTS",
+    params: [
+        { k: "text", cn: "文字", req: true, d: "支持中文" },
+        { k: "rate", cn: "语速", req: false, d: "-10 到 10，默认 0" },
+        { k: "volume", cn: "音量", req: false, d: "0 到 100，默认 100" }
+    ],
     execute: async (args) => {
         const text = V(args, 'text').replace(/["'`]/g, ' ');
         if (!text) return '错误：缺少要朗读的 text 参数';

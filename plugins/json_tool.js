@@ -14,17 +14,13 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'json_tool',
-    description: `
-JSON 处理工具：格式化、压缩、校验、JSON 转 CSV。
-【参数】
-- action: 'format' (格式化) / 'minify' (压缩) / 'validate' (校验) / 'to_csv' (转CSV)
-- source: (可选) 文件路径。如果不填则使用 text 参数
-- text: (可选) 直接的 JSON 字符串
-- dest: (可选) 输出文件路径。不填则直接返回结果
-【示例】
-{"op":"json_tool","action":"format","source":"data.json"}
-{"op":"json_tool","action":"validate","text":"{\\"a\\":1}"}
-`,
+    description: "JSON 格式化、压缩、校验、转 CSV",
+    params: [
+        { k: "action", cn: "操作", req: true, d: "format / minify / validate / to_csv" },
+        { k: "source", cn: "源文件", req: false, d: "不填则用 text" },
+        { k: "text", cn: "JSON 文本", req: false, d: "" },
+        { k: "dest", cn: "输出文件", req: false, d: "不填直接返回" }
+    ],
     execute: async (args) => {
         const action = V(args, 'action');
         const source = V(args, 'source');

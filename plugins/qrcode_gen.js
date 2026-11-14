@@ -16,14 +16,11 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'qrcode_gen',
-    description: `
-生成二维码图片。基于 Python qrcode 库，会自动安装依赖。
-【参数】
-- text: 二维码内容（网址、文字等）
-- dest: (可选) 保存的文件路径，默认 qrcode.png
-【示例】
-{"op":"qrcode_gen","text":"https://chat.deepseek.com","dest":"qr.png"}
-`,
+    description: "生成二维码图片",
+    params: [
+        { k: "text", cn: "内容", req: true, d: "网址或文字" },
+        { k: "dest", cn: "保存路径", req: false, d: "默认 qrcode.png" }
+    ],
     execute: async (args) => {
         const text = V(args, 'text');
         const dest = V(args, 'dest') || ('qrcode_' + Date.now() + '.png');

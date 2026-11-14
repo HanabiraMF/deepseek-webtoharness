@@ -15,19 +15,15 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'crypto_tool',
-    description: `
-加密与编码工具。支持哈希计算、AES 加解密、随机密码生成。
-【参数】
-- action: 'hash' (哈希) / 'aes_encrypt' (AES加密) / 'aes_decrypt' (AES解密) / 'random' (随机密码)
-- text: (可选) 明文或密文
-- source: (可选) 文件路径，读取文件内容作为 text
-- algorithm: (可选) hash 算法：md5 / sha1 / sha256 / sha512，默认 sha256
-- key: (可选) AES 密钥（需 16/24/32 字节），默认使用环境变量或固定
-- length: (可选) random 时生成密码长度，默认 16
-【示例】
-{"op":"crypto_tool","action":"hash","source":"file.txt"}
-{"op":"crypto_tool","action":"random","length":"24"}
-`,
+    description: "加密与编码：哈希、AES 加解密、随机密码",
+    params: [
+        { k: "action", cn: "操作", req: true, d: "hash / aes_encrypt / aes_decrypt / random" },
+        { k: "text", cn: "文本", req: false, d: "明文或密文" },
+        { k: "source", cn: "源文件", req: false, d: "读取文件内容作为 text" },
+        { k: "algorithm", cn: "哈希算法", req: false, d: "md5 / sha1 / sha256 / sha512，默认 sha256" },
+        { k: "key", cn: "密钥", req: false, d: "AES 需 16/24/32 字节" },
+        { k: "length", cn: "密码长度", req: false, d: "random 时使用，默认 16" }
+    ],
     execute: async (args) => {
         const action = V(args, 'action');
         let text = V(args, 'text');

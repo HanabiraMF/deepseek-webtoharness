@@ -16,7 +16,12 @@ const V = (a, k) => {
 
 module.exports = {
     name: 'python_run',
-    description: '直接运行 Python 代码或脚本。参数：code(直接执行的代码字符串) 或 path(工作区内的.py脚本路径)，可选 args(命令行参数)。',
+    description: "直接运行 Python 代码或脚本",
+    params: [
+        { k: "code", cn: "代码", req: false, d: "直接执行的代码字符串" },
+        { k: "path", cn: "脚本路径", req: false, d: "工作区内的 .py 文件" },
+        { k: "args", cn: "命令行参数", req: false, d: "" }
+    ],
     execute: async (args) => {
         const code = V(args, 'code');
         let filePath = V(args, 'path');
