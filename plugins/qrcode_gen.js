@@ -76,7 +76,7 @@ except Exception as e:
                         try { fs.unlinkSync(tmpFile); } catch {}
                         if (r2.out === 'OK' || fs.existsSync(dstAbs)) {
                             const kb = (fs.statSync(dstAbs).size / 1024).toFixed(1);
-                            resolve(`二维码已生成: ${dest} (${kb}KB)。可用 image 工具查看。`);
+                            resolve(`二维码已生成: ${dest} (${kb}KB)。展示给用户可调用 image；要让 AI 自己看到图片，请用 attach 把该文件送进对话。`);
                         } else {
                             resolve('生成失败: ' + (r2.out || '未知原因'));
                         }
@@ -87,7 +87,7 @@ except Exception as e:
         try { fs.unlinkSync(tmpFile); } catch {}
         if (r.out === 'OK' && fs.existsSync(dstAbs)) {
             const kb = (fs.statSync(dstAbs).size / 1024).toFixed(1);
-            return `二维码已生成: ${dest} (${kb}KB)。可用 image 工具查看。`;
+            return `二维码已生成: ${dest} (${kb}KB)。展示给用户可调用 image；要让 AI 自己看到图片，请用 attach 把该文件送进对话。`;
         }
         return '生成失败: ' + (r.out || '未知');
     }

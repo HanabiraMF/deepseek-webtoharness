@@ -69,7 +69,7 @@ module.exports = {
                 if (err) return resolve('图片处理失败: ' + (stderr || err.message));
                 if (fs.existsSync(dstAbs)) {
                     const stat = fs.statSync(dstAbs);
-                    resolve(`图片处理成功: ${dest} (${(stat.size/1024).toFixed(1)}KB)`);
+                    resolve(`图片处理成功: ${dest} (${(stat.size/1024).toFixed(1)}KB)。展示给用户可调用 image；要让 AI 自己看到图片，请用 attach 把该文件送进对话。`);
                 } else {
                     resolve('命令执行但未生成文件');
                 }
