@@ -269,6 +269,26 @@
         .ds-pm-btn.danger { color: #f25a5a; border-color: rgba(242,90,90,0.35); }
         .ds-pm-btn.danger:hover:not(:disabled) { background: rgba(242,90,90,0.12); }
         .ds-pm-section-title { font-size: 12px; color: #888; margin: 12px 0 6px; font-weight: 600; }
+        /* ===== 插件代码编辑器 ===== */
+        .ds-pm-editor-wrap { display: flex; flex-direction: column; gap: 10px; }
+        .ds-pm-name-row { display: flex; gap: 8px; align-items: center; }
+        .ds-pm-name-row > label { font-size: 12px; color: #888; flex-shrink: 0; }
+        .ds-pm-name-row .ds-input { flex: 1; font-family: ui-monospace, monospace; font-size: 12px; }
+        .ds-pm-code-wrap { position: relative; width: 100%; height: 340px; min-height: 200px; max-height: 52vh; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; background: #0d0f14; transition: border-color .15s, background .15s; }
+        .ds-pm-code-wrap:focus-within { border-color: var(--dsw-alias-brand-primary, #3964fe); }
+        .ds-pm-code-wrap.drag-hover { border-color: var(--dsw-alias-brand-primary, #3964fe); background: rgba(57,100,254,0.10); }
+        .ds-pm-code-pre, .ds-pm-editor { margin: 0; padding: 12px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; tab-size: 4; border: 0; box-sizing: border-box; }
+        .ds-pm-code-pre { position: absolute; inset: 0; overflow: hidden; color: #c8d0da; pointer-events: none; }
+        .ds-pm-editor { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; background: transparent; color: transparent; caret-color: #c8d0da; outline: none; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+        .ds-pm-editor::-webkit-scrollbar { width: 0; height: 0; }
+        .ds-pm-editor::selection { background: rgba(57,100,254,0.35); color: transparent; }
+        .ds-tok-kw { color: #c792ea; }
+        .ds-tok-str { color: #c3e88d; }
+        .ds-tok-num { color: #f78c6c; }
+        .ds-tok-cmt { color: #6b7280; font-style: italic; }
+        .ds-tok-fn { color: #82aaff; }
+        .ds-pm-editor-hint { font-size: 11.5px; color: #7c8290; line-height: 1.8; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .ds-pm-editor-status { font-size: 12px; color: #888; min-height: 18px; line-height: 1.5; }
         /* 插件按钮宿主为空时不占位，避免吃掉额外的 flex gap 造成视觉间距过大 */
         #ds-plugin-toolbar-host:empty { display: none !important; }
         /* ===== 通用折叠列表 ===== */
@@ -2758,7 +2778,7 @@ await sleep(300);
             <h3 style="margin:0 0 2px;font-size:15px;display:flex;align-items:center;gap:8px;">${I.copy}<span>插件管理</span></h3>
             <div style="font-size:12px;color:#888;margin-bottom:10px;">服务端插件位于 <code>plugins/</code>，操作后自动热重载。</div>
             <div id="ds-pm-body" class="ds-pm-list"></div>
-            <div style="display:flex;gap:8px;margin-top:14px;justify-content:space-between;align-items:center;">
+            <div id="ds-pm-bottom" style="display:flex;gap:8px;margin-top:14px;justify-content:space-between;align-items:center;">
                 <button class="ds-btn ds-btn-primary" id="ds-pm-add" style="height:32px;">+ 新建插件</button>
                 <div style="display:flex;gap:8px;">
                     <button class="ds-btn ds-btn-secondary" id="ds-pm-reload" style="height:32px;">重新加载</button>
@@ -2783,6 +2803,8 @@ await sleep(300);
         }
 
         async function render() {
+            const _bottom = overlay.querySelector('#ds-pm-bottom');
+            if (_bottom) _bottom.style.display = 'flex';
             body.innerHTML = '<div style="padding:24px;text-align:center;color:#888;">加载中...</div>';
             let serverList = [];
             try {
@@ -2891,67 +2913,133 @@ await sleep(300);
         };
         overlay.querySelector('#ds-pm-add').onclick = () => showAddForm();
 
+        // 轻量 JS 语法高亮：转义后按 token 着色，供高亮层使用
+        function highlightJS(src) {
+            const esc = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const re = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*)|('(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`)|\b(0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|typeof|instanceof|in|of|this|class|extends|super|try|catch|finally|throw|async|await|yield|delete|void|import|export|from|default|true|false|null|undefined|NaN|Infinity)\b|([A-Za-z_$][\w$]*)(?=\s*\()/g;
+            let out = '', last = 0, m;
+            while ((m = re.exec(src)) !== null) {
+                if (m.index > last) out += esc(src.slice(last, m.index));
+                if (m[1]) out += '<span class="ds-tok-cmt">' + esc(m[1]) + '</span>';
+                else if (m[2]) out += '<span class="ds-tok-str">' + esc(m[2]) + '</span>';
+                else if (m[3]) out += '<span class="ds-tok-num">' + esc(m[3]) + '</span>';
+                else if (m[4]) out += '<span class="ds-tok-kw">' + esc(m[4]) + '</span>';
+                else if (m[5]) out += '<span class="ds-tok-fn">' + esc(m[5]) + '</span>';
+                last = re.lastIndex;
+            }
+            if (last < src.length) out += esc(src.slice(last));
+            return out + '\n';
+        }
+
         function showAddForm() {
-            body.innerHTML = '<div style="display:flex;flex-direction:column;gap:12px;">' +
-                '<div class="ds-pm-drop" id="ds-pm-drop">' +
-                '  <div style="font-size:13px;margin-bottom:6px;">把 .js 插件文件拖到这里</div>' +
-                '  <div>或点击选择文件。文件名即插件名（如 my_tool.js）。</div>' +
-                '  <div style="margin-top:10px;"><button class="ds-btn ds-btn-secondary" id="ds-pm-pick" style="height:30px;">选择文件</button></div>' +
-                '  <input type="file" id="ds-pm-file-input" accept=".js,text/javascript" style="display:none;" />' +
+            const _bottom = overlay.querySelector('#ds-pm-bottom');
+            if (_bottom) _bottom.style.display = 'none';
+
+            body.innerHTML = '<div class="ds-pm-editor-wrap">' +
+                '<div class="ds-pm-name-row">' +
+                '  <label>文件名</label>' +
+                '  <input class="ds-input" id="ds-pm-edit-name" placeholder="my_tool（将保存为 plugins/my_tool.js）" spellcheck="false" />' +
                 '</div>' +
-                '<div id="ds-pm-file-info" style="display:none;font-size:12px;color:#888;"></div>' +
-                '<div id="ds-pm-status" style="font-size:12px;color:#888;"></div>' +
+                '<div class="ds-pm-code-wrap" id="ds-pm-code-wrap">' +
+                '  <pre class="ds-pm-code-pre" id="ds-pm-edit-pre" aria-hidden="true"></pre>' +
+                '  <textarea class="ds-pm-editor" id="ds-pm-edit-code" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="在此直接编写插件代码，或把 .js 文件拖进来读取内容后继续编辑…"></textarea>' +
+                '</div>' +
+                '<div class="ds-pm-editor-hint">' +
+                '  <span>拖入 .js 文件可导入内容；点「安装」才会写入 plugins/ 并热加载。</span>' +
+                '  <button class="ds-pm-btn" id="ds-pm-edit-pick" style="height:26px;">导入文件</button>' +
+                '  <input type="file" id="ds-pm-edit-file" accept=".js,text/javascript" style="display:none;" />' +
+                '</div>' +
+                '<div class="ds-pm-editor-status" id="ds-pm-edit-status"></div>' +
                 '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
-                '<button class="ds-btn ds-btn-secondary" id="ds-pm-add-cancel" style="height:32px;">取消</button>' +
-                '</div></div>';
+                '  <button class="ds-btn ds-btn-secondary" id="ds-pm-edit-cancel" style="height:32px;">取消</button>' +
+                '  <button class="ds-btn ds-btn-primary" id="ds-pm-edit-install" style="height:32px;">安装</button>' +
+                '</div>' +
+                '</div>';
 
-            const drop = body.querySelector('#ds-pm-drop');
-            const fileInput = body.querySelector('#ds-pm-file-input');
-            const infoEl = body.querySelector('#ds-pm-file-info');
-            const statusEl = body.querySelector('#ds-pm-status');
-            body.querySelector('#ds-pm-add-cancel').onclick = () => render();
-            body.querySelector('#ds-pm-pick').onclick = (e) => { e.stopPropagation(); fileInput.click(); };
-            drop.onclick = () => fileInput.click();
-            fileInput.onchange = () => { if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]); };
+            const nameEl = body.querySelector('#ds-pm-edit-name');
+            const codeEl = body.querySelector('#ds-pm-edit-code');
+            const preEl = body.querySelector('#ds-pm-edit-pre');
+            const wrapEl = body.querySelector('#ds-pm-code-wrap');
+            const statusEl = body.querySelector('#ds-pm-edit-status');
+            const fileEl = body.querySelector('#ds-pm-edit-file');
 
-            ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); drop.classList.add('hover'); }));
-            ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); if (ev === 'dragleave' && drop.contains(e.relatedTarget)) return; drop.classList.remove('hover'); }));
-            drop.addEventListener('drop', (e) => {
+            function syncHL() {
+                preEl.innerHTML = highlightJS(codeEl.value);
+                preEl.scrollTop = codeEl.scrollTop;
+            }
+            codeEl.addEventListener('input', syncHL);
+            codeEl.addEventListener('scroll', () => { preEl.scrollTop = codeEl.scrollTop; });
+
+            async function loadFile(file) {
+                if (!file) return;
+                const fname = (file.name || '').trim();
+                if (!/\.js$/i.test(fname)) { statusEl.textContent = '只支持 .js 文件'; return; }
+                statusEl.textContent = '读取中…';
+                try {
+                    const txt = await file.text();
+                    codeEl.value = txt;
+                    syncHL();
+                    if (!nameEl.value.trim()) nameEl.value = fname.replace(/\.js$/i, '');
+                    statusEl.textContent = '已导入 ' + fname + '（' + (file.size / 1024).toFixed(1) + 'KB），可继续编辑';
+                } catch (e) {
+                    statusEl.textContent = '读取失败: ' + e.message;
+                }
+            }
+
+            ['dragenter', 'dragover'].forEach(ev => wrapEl.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); wrapEl.classList.add('drag-hover'); }));
+            ['dragleave', 'drop'].forEach(ev => wrapEl.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); wrapEl.classList.remove('drag-hover'); }));
+            wrapEl.addEventListener('drop', (e) => {
                 const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-                if (f) handleFile(f);
+                if (f) loadFile(f);
             });
 
-            async function handleFile(file) {
-                const name = (file.name || '').trim();
-                if (!/\.js$/i.test(name)) { showToast('error', '只支持 .js 插件文件', 3000); return; }
-                const pluginName = name.replace(/\.js$/i, '');
-                if (!/^[a-zA-Z0-9_]+$/.test(pluginName)) { showToast('error', '文件名只能包含字母、数字、下划线', 3000); return; }
-                infoEl.style.display = 'block';
-                infoEl.innerHTML = '已选择：<span class="ds-pm-file">' + esc(name) + '</span>（' + (file.size/1024).toFixed(1) + 'KB），正在上传...';
-                let code = '';
-                try { code = await file.text(); }
-                catch (e) { infoEl.innerHTML = '读取文件失败: ' + esc(e.message); return; }
-                if (!code || !code.trim()) { infoEl.innerHTML = '文件内容为空'; return; }
-                if (code.indexOf('module.exports') < 0) {
-                    infoEl.innerHTML = '⚠ 内容中未找到 module.exports，可能不是有效的服务端插件。仍将尝试写入。';
+            // Tab 插入 4 空格
+            codeEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Tab') {
+                    e.preventDefault();
+                    const st = codeEl.selectionStart, en = codeEl.selectionEnd;
+                    codeEl.value = codeEl.value.slice(0, st) + '    ' + codeEl.value.slice(en);
+                    codeEl.selectionStart = codeEl.selectionEnd = st + 4;
+                    syncHL();
                 }
+            });
+
+            body.querySelector('#ds-pm-edit-pick').onclick = () => fileEl.click();
+            fileEl.onchange = () => { if (fileEl.files && fileEl.files[0]) loadFile(fileEl.files[0]); };
+            body.querySelector('#ds-pm-edit-cancel').onclick = () => render();
+
+            body.querySelector('#ds-pm-edit-install').onclick = async () => {
+                const rawName = nameEl.value.trim().replace(/\.js$/i, '');
+                if (!rawName) { statusEl.textContent = '请填写文件名'; nameEl.focus(); return; }
+                if (!/^[a-zA-Z0-9_]+$/.test(rawName)) { statusEl.textContent = '文件名只能包含字母、数字、下划线'; return; }
+                if (rawName === '_workspace') { statusEl.textContent = '不能覆盖内部模块 _workspace'; return; }
+                const code = codeEl.value;
+                if (!code.trim()) { statusEl.textContent = '代码为空'; codeEl.focus(); return; }
+
+                const btn = body.querySelector('#ds-pm-edit-install');
+                btn.disabled = true;
                 try {
-                    statusEl.textContent = '正在写入 plugins/' + pluginName + '.js ...';
-                    const r = await fsCall('writefile', { path: 'plugins/' + pluginName + '.js', content: code });
+                    statusEl.textContent = '正在写入 plugins/' + rawName + '.js …';
+                    const r = await fsCall('writefile', { path: 'plugins/' + rawName + '.js', content: code });
                     if (!r.ok) throw new Error(r.error || '写入失败');
-                    statusEl.textContent = '写入完成，正在热加载...';
+                    statusEl.textContent = '写入完成，正在热加载…';
                     await doReload();
-                    const exists = (W.serverPlugins || []).some(p => p.name === pluginName);
+                    const exists = (W.serverPlugins || []).some(p => p.name === rawName);
                     if (exists) {
-                        showToast('success', '插件 ' + pluginName + ' 已安装并启用', 2500);
+                        showToast('success', '插件 ' + rawName + ' 已安装并启用', 2500);
                         await render();
                     } else {
-                        statusEl.innerHTML = '<span style="color:#ffb74d;">文件已写入，但热加载后未发现该插件（可能内部 name 与文件名不一致或代码有误），请检查后重试。</span>';
+                        statusEl.innerHTML = '<span style="color:#ffb74d;">文件已写入，但热加载后未发现该插件（内部 name 需与文件名一致，且需导出 execute），请检查后重试。</span>';
+                        btn.disabled = false;
                     }
                 } catch (e) {
                     statusEl.innerHTML = '<span style="color:#f25a5a;">安装失败: ' + esc(e.message) + '</span>';
+                    btn.disabled = false;
                 }
-            }
+            };
+
+            syncHL();
+            setTimeout(() => { try { codeEl.focus(); } catch (e) {} }, 50);
         }
 
         await render();
