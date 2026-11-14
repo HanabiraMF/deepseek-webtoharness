@@ -81,7 +81,10 @@ async function runCheck(c) {
             return { pass: false, msg: 'json_field 需要 path 或 text' };
         }
         const actual = getPath(data, c.field);
-        let expect = c.equals;
+        // 期望值字段兼容 equals / value / expected 三种写法
+        let expect = (c.equals !== undefined) ? c.equals
+                   : (c.value !== undefined) ? c.value
+                   : c.expected;
         if (typeof expect === 'string') {
             try { expect = JSON.parse(expect); } catch (e) { /* 保持字符串 */ }
         }

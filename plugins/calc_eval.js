@@ -59,7 +59,7 @@ module.exports = {
     name: 'calc_eval',
     description: "表达式求值/快速计算：四则运算、数学函数、数组统计",
     params: [
-        { k: "expr", cn: "表达式", req: true, d: "可逗号或换行分隔多个" },
+        { k: "expr", cn: "表达式", req: true, d: "可逗号或换行分隔多个。注意：乘方用 ** 而非 ^（^ 在 JS 中是按位异或，2^10 得 8 不是 1024）" },
         { k: "vars", cn: "变量", req: false, d: "JSON 字符串，如 {\"a\":3}" },
         { k: "source", cn: "表达式文件", req: false, d: "每行一个表达式" },
         { k: "precision", cn: "小数位", req: false, d: "默认保留原始精度" }
