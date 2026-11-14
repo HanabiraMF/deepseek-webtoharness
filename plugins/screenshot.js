@@ -48,7 +48,7 @@ module.exports = {
                 if (err) return resolve('截图失败: ' + (stderr || err.message));
                 if (fs.existsSync(absPath)) {
                     const kb = (fs.statSync(absPath).size / 1024).toFixed(1);
-                    resolve('截图成功：' + filename + '（' + kb + 'KB）。展示给用户看可调用 image；要让 AI 自己看到画面，请用 attach 把该文件送进对话。');
+                    resolve('截图成功：' + filename + '（' + kb + 'KB）。如需查看，请用 attach 把该文件送进对话。');
                 } else {
                     resolve('命令已执行但未生成文件，可能缺少屏幕访问权限。');
                 }

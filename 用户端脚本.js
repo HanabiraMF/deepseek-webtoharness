@@ -554,9 +554,12 @@ ${taskGoal}
   服务端会自动：语法预检 → 备份旧版 → 写入 → 热加载 → 校验 name → 失败回滚。
   挂载后立即可用，无需重启服务。
 
+- plugin_help: <name>插件名</name>（可选）
+  获取插件完整参数表。系统提示词里插件只显示「名称 + 一句话简介」，要用某个插件前先调用它拿参数；不传 name 则列出全部插件简介。
+  示例：<op>plugin_help</op><name>screenshot</name>
 - reload_server_plugins:（无参数）
   仅在手动改过 plugins/ 目录下的文件、想重新加载时用。日常挂插件用 mount_plugin 即可。
-  服务端插件模板：module.exports = { name, description, params, execute: async (args) => { ... } }，可用 fs/child_process/http 等，无跨域限制，可持久化。description 写一句简介；参数用 params 数组描述（每项 { k:参数名, cn:中文名, req:是否必填, d:说明 }），会渲染成参数表进入系统提示词和插件菜单。
+  服务端插件模板：module.exports = { name, description, params, execute: async (args) => { ... } }，可用 fs/child_process/http 等，无跨域限制，可持久化。description 写一句简介；参数用 params 数组描述（每项 { k:参数名, cn:中文名, req:是否必填, d:说明 }）。系统提示词里只显示插件名+简介，参数表需由 AI 调用 plugin_help 按需获取。
 
 ━━━━━━ 危险路径保护 ━━━━━━
 对 Windows / Program Files / ProgramData / AppData / 回收站等系统敏感区域的写操作默认被拒绝。确需操作时在该 toolcall 内加 <force>true</force> 强制允许。所有写操作都会记入工作区 .ds_audit.log。
@@ -645,25 +648,29 @@ ${getPluginsPrompt()}
     // 把插件的 name + description 渲染成提示词条目：
     // 统一用 <op>插件名</op> 的形式调用，与内置工具完全一致；
     // 多行 description 的后续行统一缩进两格，避免与系统提示词的其他段落混淆。
-    // 统一插件提示词格式：一行简介 + 参数表（中文名 + 是否必填 + 说明）
+    // 插件提示词：默认只给「名称 + 一句话简介」，参数表按需由 AI 调用 plugin_help 获取
     function fmtPluginEntry(p) {
         const name = p.name || '(未命名)';
         const desc = String(p.description || '(无描述)').replace(/\s+/g, ' ').trim();
-        let out = `- ${name}: ${desc}`;
+        return `- ${name}: ${desc}\n`;
+    }
+
+    // 生成单个插件的完整参数表（供 plugin_help 工具复用）
+    function fmtPluginParams(p) {
+        const name = p.name || '(未命名)';
+        const desc = String(p.description || '(无描述)').replace(/\s+/g, ' ').trim();
+        let out = `${name}: ${desc}\n`;
         const params = Array.isArray(p.params) ? p.params : [];
-        if (params.length) {
-            out += '\n  参数：';
-            for (const pa of params) {
-                const k = pa.k || '';
-                const cn = pa.cn ? `(${pa.cn})` : '';
-                const req = pa.req ? '必填' : '可选';
-                const d = pa.d ? `：${pa.d}` : '';
-                out += `\n    · ${k}${cn} [${req}]${d}`;
-            }
-        } else {
-            out += '\n  参数：无';
+        if (!params.length) return out + '参数：无（直接调用即可）';
+        out += '参数：\n';
+        for (const pa of params) {
+            const k = pa.k || '';
+            const cn = pa.cn ? `（${pa.cn}）` : '';
+            const req = pa.req ? '必填' : '可选';
+            const d = pa.d ? `：${pa.d}` : '';
+            out += `  · ${k}${cn} [${req}]${d}\n`;
         }
-        return out + '\n';
+        return out.trimEnd();
     }
 
     function getPluginsPrompt() {
@@ -675,6 +682,8 @@ ${getPluginsPrompt()}
         prompt += '以下工具由插件提供，调用方式与内置工具完全相同：用 ```toolcall 包裹 <toolcall><op>工具名</op>参数...</toolcall>。\n';
         prompt += '注意：插件常使用「自定义标签」传参（如 <schema>、<checks>、<rows>、<port> 等），这些标签必须写在 <toolcall> 内部；\n';
         prompt += '      不要想当然认为只有内置参数名才有效——按插件说明里的标签名原样书写即可。\n';
+        prompt += '★ 这里只列插件名称与简介，不含参数表。要用某个插件前，先调用 plugin_help 获取它的完整参数表：\n';
+        prompt += '  用 <op>plugin_help</op><name>插件名</name> 获取单个插件参数；不传 name 则列出全部插件简介。\n';
         if (front.length) {
             prompt += '\n— 前端拓展工具（当前页面内存，刷新失效）—\n';
             front.forEach(p => { prompt += fmtPluginEntry(p); });
@@ -2000,6 +2009,30 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
                `现在可直接用 <op>${data.name}</op> 调用，无需重启服务。`;
     }
 
+    // 获取插件参数表：给了 name 就返回该插件完整参数，否则列出全部插件名+简介
+    async function toolPluginHelp(call) {
+        const raw = call.name || call.plugin_name || readExtra(call, 'name') || readExtra(call, 'plugin_name') || '';
+        const name = String(raw).trim();
+        const front = (W.DS_Agent_Plugins || []).map(p => Object.assign({}, p, { _src: '前端' }));
+        const server = (W.serverPlugins || []).map(p => Object.assign({}, p, { _src: '服务端' }));
+        const all = server.concat(front);
+
+        if (!name) {
+            if (!all.length) return '当前没有任何可用的插件。';
+            let out = `共 ${all.length} 个插件。要查看某个插件的参数表，请调用 plugin_help 并传入 name：\n\n`;
+            out += all.map(p => `- ${p.name}（${p._src}）: ${String(p.description || '(无描述)').replace(/\s+/g, ' ').trim()}`).join('\n');
+            return out;
+        }
+
+        const lower = name.toLowerCase();
+        const hit = all.find(p => String(p.name || '').toLowerCase() === lower);
+        if (!hit) {
+            const names = all.map(p => p.name).join('、') || '（无）';
+            throw new ToolError('查找插件', `找不到插件 "${name}"`, `可用插件：${names}`);
+        }
+        return fmtPluginParams(hit);
+    }
+
     async function toolReloadServerPlugins(call) {
         try {
             const resp = await agentFetch('/plugins/reload', {}, 5000);
@@ -2090,6 +2123,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
             case 'kill_process': return toolKillProcess(call, reason);
             case 'reload_server_plugins': return toolReloadServerPlugins(call);
             case 'mount_plugin': return toolMountPlugin(call);
+            case 'plugin_help': return toolPluginHelp(call);
             default: {
                 // 1. 尝试在前端社区插件中查找
                 if (W.DS_Agent_Plugins) {

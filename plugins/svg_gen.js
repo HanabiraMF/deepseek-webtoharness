@@ -66,6 +66,6 @@ module.exports = {
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(abs, content, 'utf8');
         const kb = (fs.statSync(abs).size / 1024).toFixed(2);
-        return 'SVG 已生成：' + dest + '（' + kb + 'KB）。展示给用户可调用 image/preview；要让 AI 自己看到渲染结果，请用 attach 把该文件送进对话。';
+        return 'SVG 已生成：' + dest + '（' + kb + 'KB）。如需查看，请用 attach 把该文件送进对话。';
     }
 };
