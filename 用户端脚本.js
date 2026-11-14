@@ -2072,6 +2072,26 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         return `已休眠 ${ms}ms`;
     }
 
+    // ===== 服务端插件回传的 DOM 指令执行器 =====
+    // 服务端插件在 execute 中返回 { __dom: ['js代码', ...], message } 时，
+    // server.js 会把指令透传到前端，这里在页面上下文内逐条执行。
+    // 与前端插件的区别：代码由 Node 进程生成，能结合本地文件/命令的结果来渲染 UI。
+    function execServerDom(cmds) {
+        if (!Array.isArray(cmds) || !cmds.length) return { ok: 0, fail: 0 };
+        let ok = 0, fail = 0;
+        for (const code of cmds) {
+            if (typeof code !== 'string' || !code.trim()) continue;
+            try {
+                (new Function('window', 'document', code)).call(W, W, document);
+                ok++;
+            } catch (e) {
+                fail++;
+                log('服务端 DOM 指令执行失败: ' + e.message);
+            }
+        }
+        return { ok, fail };
+    }
+
     async function dispatchTool(op, call, msgEl, reason) {
         switch (op) {
             case 'listdir': return toolListdir(call);
@@ -2145,7 +2165,13 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
                         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                         const data = await resp.json();
                         if (data.error) throw new Error(data.error);
-                        return data.result;
+                        // 插件若回传了 DOM 指令，就在页面内直接执行（内置能力，无需桥接插件）
+                        let domNote = '';
+                        if (Array.isArray(data.dom) && data.dom.length) {
+                            const r = execServerDom(data.dom);
+                            domNote = `\n[已执行 ${r.ok} 条 DOM 指令${r.fail ? `，失败 ${r.fail} 条` : ''}]`;
+                        }
+                        return String(data.result || '') + domNote;
                     } catch (e) {
                         throw new ToolError('服务端插件执行', e.message, '请检查本地服务端和插件代码');
                     }

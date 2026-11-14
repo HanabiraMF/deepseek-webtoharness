@@ -1058,7 +1058,15 @@ const server = http.createServer(async (req, res) => {
                 return sendJson(res, 404, { error: `服务端插件不存在: ${name}` });
             }
             Promise.resolve(serverPlugins[name].execute(args))
-                .then(result => sendJson(res, 200, { result: String(result) }))
+                .then(result => {
+                    // 服务端插件可返回 { __dom: ['js代码', ...], message: '可选说明' }
+                    // 前端分发器会在页面内直接执行这些指令（内置能力，无需额外桥接插件）
+                    if (result && typeof result === 'object' && Array.isArray(result.__dom)) {
+                        const dom = result.__dom.filter(x => typeof x === 'string');
+                        return sendJson(res, 200, { result: String(result.message || ''), dom });
+                    }
+                    sendJson(res, 200, { result: String(result) });
+                })
                 .catch(err => sendJson(res, 200, { error: err.message || String(err) }));
         } catch (e) {
             sendJson(res, 400, { error: e.message });
@@ -1258,12 +1266,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') console.error(`端口 ${PORT} 被占用，设置 DS_AGENT_PORT 换端口`);
+    if (e.code === 'EADDRINUSE') console.error(`端口 ${PORT} 被占用，设置 DS_AGENT_PORT 换端口` + (process.env.DS_AGENT_PORT ? '' : '；注意：换端口后须同步修改 用户端脚本.js 中的 127.0.0.1:39999 常量'));
     else console.error(e);
 });
 
 server.listen(PORT, '127.0.0.1', () => {
     console.log(`CMD 服务已启动: http://127.0.0.1:${PORT}`);
+    if (PORT !== 39999) console.log(`[提示] 当前端口为 ${PORT}（非默认 39999）。用户端脚本.js 中写死了 http://127.0.0.1:39999，请将其全部替换为 ${PORT} 后再连接，否则前端无法访问本地服务。`);
     if (REQUIRE_TOKEN) {
         console.log('==============================================');
         console.log(' 访问 Token（粘贴到插件面板，仅需一次）:');
