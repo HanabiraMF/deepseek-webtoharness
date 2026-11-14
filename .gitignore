@@ -35,3 +35,15 @@ video/
 
 # 本地归档目录（旧包、备份、临时产物）
 _archive/
+
+# 本地智能体运行产物
+.ds_backups/
+.ds_snapshots/
+.ds_audit.log
+tmp/
+网上复制的/
+
+# 测试临时产物（保留 test/smoke.js）
+test.pdf
+test/demo_*.js
+test/demo_*.json
