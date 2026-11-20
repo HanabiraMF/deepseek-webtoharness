@@ -245,7 +245,7 @@
         .ds-btn-danger:hover:not(:disabled) { background: rgba(242,90,90,0.12); }
         .ds-input { padding: 8px 12px; background: var(--dsw-alias-bg-layer-1, #232324); border: 1px solid rgba(255,255,255,0.1); color: var(--dsw-alias-label-primary, #f9fafb); border-radius: 10px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box; font-family: inherit; transition: border-color .15s; }
         .ds-input:focus { border-color: var(--dsw-alias-brand-primary, #3964fe); }
-        .ds-log-area { max-height: 200px; overflow-y: auto; font-size: 11px; color: #81858c; font-family: ui-monospace, monospace; background: rgba(0,0,0,0.25); padding: 6px; border-radius: 8px; line-height: 1.5; white-space: pre-wrap; }
+        .ds-log-area { max-height: 200px; overflow-y: auto; font-size: 11px; color: #81858c; font-family: ui-monospace, monospace; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.06); padding: 7px 9px; border-radius: 8px; line-height: 1.55; white-space: pre-wrap; }
         .ds-log-area > div { margin-bottom: 2px; }
         .ds-log-area .err { color: #f25a5a; }
         .ds-log-area .ok { color: #4ade80; }
@@ -375,6 +375,47 @@
         #ds-local-panel:not(.ds-fw-panel) .ds-tab-pane { gap: 6px; }
         #ds-local-panel:not(.ds-fw-panel) .ds-log-area { max-height: 130px; }
         #ds-local-panel:not(.ds-fw-panel) #ds-setup-container { gap: 6px; }
+
+        /* 底部操作栏：常驻，不随选项卡切换 */
+        .ds-bottom-bar {
+            display: flex; gap: 6px; flex-shrink: 0;
+            padding-top: 8px; margin-top: 2px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+        .ds-btn-sm { height: 28px !important; padding: 0 10px !important; font-size: 12px !important; flex: 1 1 0; min-width: 0; }
+        /* 复选框/单选框统一着色与大小 */
+        #ds-local-panel input[type="checkbox"],
+        #ds-local-panel input[type="radio"] { accent-color: #3964fe; width: 13px; height: 13px; margin: 0; flex-shrink: 0; cursor: pointer; }
+        /* 选项行统一为小块卡片，悬停有反馈 */
+        #ds-local-panel .ds-opt {
+            display: flex; align-items: center; gap: 7px; cursor: pointer;
+            padding: 6px 8px; border-radius: 7px; font-size: 12px; line-height: 1.35;
+            color: var(--dsw-alias-label-primary, #c7ccd4);
+            background: rgba(255,255,255,0.025);
+            border: 1px solid transparent;
+            transition: background-color .15s, border-color .15s;
+        }
+        #ds-local-panel .ds-opt:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.09); }
+        #ds-local-panel .ds-opt-sub { padding-left: 24px; opacity: .85; }
+        #ds-local-panel .ds-field-label {
+            font-size: 11px; color: #81858c; margin: 2px 0 -2px;
+        }
+        #ds-local-panel .ds-group {
+            display: flex; flex-direction: column; gap: 7px;
+            padding: 10px; border-radius: 9px;
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.075);
+        }
+        #ds-local-panel .ds-group-title {
+            font-size: 11px; font-weight: 600; color: #9aa3ae;
+            letter-spacing: .3px; margin-bottom: 1px;
+        }
+        /* 数字输入行 */
+        #ds-local-panel .ds-num-row {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 12px; color: #9aa3ae;
+        }
+        #ds-local-panel .ds-num-row .ds-input { width: 62px; padding: 4px 7px; font-size: 12px; text-align: center; }
         .ds-fw {
             position: fixed; z-index: 99998; display: flex; flex-direction: column;
             background: var(--dsw-alias-bg-layer-2, #2c2c2e);
@@ -413,7 +454,15 @@
         #ds-local-panel.ds-fw-panel .ds-tab-pane[data-pane="log"] { display: none !important; }
         /* 悬浮模式：插话/日志已拆成独立窗口，标签栏无意义，隐藏 */
         #ds-local-panel.ds-fw-panel #ds-tab-bar { display: none !important; }
-        #ds-panel-head { user-select: none; }
+        #ds-panel-head {
+            user-select: none; flex-shrink: 0;
+            padding-bottom: 8px; margin-bottom: -2px;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+        #ds-panel-head > * { min-width: 0; }
+        #ds-panel-head > div:first-child { flex-shrink: 0; white-space: nowrap; }
+        #ds-panel-head > span:last-child { flex-shrink: 1; min-width: 0; justify-content: flex-end; }
+        #ds-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
         .ds-fw-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .ds-fw-min, #ds-min-btn { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; padding: 0; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: #81858c; cursor: pointer; flex-shrink: 0; font-family: inherit; line-height: 0; }
         .ds-fw-min:hover, #ds-min-btn:hover { background: rgba(255,255,255,0.12); color: #f9fafb; }
@@ -2072,7 +2121,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         // 挂载插件会把�����码载入服务端进程执行：非完全权限模式必须确认
         if (!autoMode) {
             if (!await showConfirmDialog('挂载服务端插件', name, call.reason,
-                `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/网络访问权限。</div>`))
+                `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/�����络访问权限。</div>`))
                 throw new ToolError('用户确认', '用户取消了插件挂载', '');
         }
 
@@ -2543,7 +2592,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         isProcessing = true;
         processingStart = Date.now();
         try {
-            dsSetStatus('working', '无尽探索·催促继续');
+            dsSetStatus('working', '催促继续');
             log(`无尽探索：AI 未调用工具，${Math.round(gap / 1000)}s 后催促继续（第 ${endlessIdleCount} 次）`);
             const r = await sendMessage(buildEndlessPrompt(), 8000);
             if (!r.ok) {
@@ -2629,7 +2678,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
             processingStart = Date.now();
             const sec = Math.round(batchCooldownMs / 1000);
             log(`⚠ 已连续执行 ${toolcallCounter} 个工具，暂停 ${sec}s 冷却后再继续（防频率限制）`);
-            dsSetStatus('working', `防封控冷却中 ${sec}s`);
+            dsSetStatus('working', `冷却 ${sec}s`);
             showToast('warning', `频率保护：已连续执行 ${toolcallCounter} 个工具，暂停 ${sec} 秒冷却...`, 3000);
             await sleep(batchCooldownMs);
             toolcallCounter = 0;
@@ -2741,7 +2790,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         // 回传前等待（可调）：给 AI 侧留出喘息时间，降低连续请求触发限流的概率
         if (preReturnWaitMs > 0) {
             const waitSec = Math.round(preReturnWaitMs / 1000);
-            dsSetStatus('working', `回传前等待 ${waitSec}s`);
+            dsSetStatus('working', `等待 ${waitSec}s`);
             log(`回传前等待 ${waitSec}s（可在操作页调整）`);
             let leftMs = preReturnWaitMs;
             while (leftMs > 0) {
@@ -2867,7 +2916,7 @@ await sleep(300);
                 pendingRetries++;
                 const reason = pr.reason || '';
                 if (reason.includes('按钮') || reason.includes('生成')) {
-                    dsSetStatus('working', '等待 AI 生成完成...');
+                    dsSetStatus('working', '等待生成完成');
                 } else {
                     log(`重发失败（${reason}），10 秒后自动重试（${pendingRetries}/${PENDING_MAX_RETRIES}）`);
                     dsSetStatus('working', '自动重试中');
@@ -3225,43 +3274,45 @@ await sleep(300);
         panel.className = 'ds-panel-container';
         panel.innerHTML = `
             <div id="ds-panel-head" style="display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:grab;">
-                <div style="display:flex;align-items:center;font-weight:600;color:var(--dsw-alias-brand-primary,#3964fe);gap:6px;">
+                <div style="display:flex;align-items:center;font-weight:600;color:#79a1ff;gap:6px;white-space:nowrap;">
                     <span id="ds-dot" class="ds-status-dot"></span>本地互联
                 </div>
-                <span style="display:flex;align-items:center;gap:6px;">
-                    <span id="ds-status" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);">未连接</span>
+                <span style="display:flex;align-items:center;gap:5px;min-width:0;">
+                    <span id="ds-status" style="font-size:11px;color:#81858c;">未连接</span>
                     <button id="ds-min-btn" title="最小化"></button>
-                    <button id="ds-mode-btn" title="切换 侧边栏 / 悬浮窗" style="height:20px;padding:0 6px;font-size:10px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#81858c;cursor:pointer;font-family:inherit;">悬浮</button>
+                    <button id="ds-mode-btn" title="切换 侧边栏 / 悬浮窗" style="height:19px;padding:0 6px;font-size:10px;border-radius:5px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:#81858c;cursor:pointer;font-family:inherit;flex-shrink:0;">悬浮</button>
                 </span>
             </div>
             <div id="ds-setup-container" style="display:flex;flex-direction:column;gap:8px;">
-                <div id="ds-abs-container" style="display:none;flex-direction:column;gap:4px;">
-                    <span style="font-size:11px;color:#888;line-height:1.4;">工作区目录（AI 将在此目录下操作文件）:</span>
-                    <div style="display:flex;gap:6px;align-items:flex-start;">
-                        <code id="ds-workspace-path" style="flex:1;font-size:11px;color:#3964fe;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:1.5;padding:4px 6px;background:rgba(0,0,0,0.25);border-radius:4px;">（尚未选择）</code>
-                        <button id="ds-pick-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">选择目录</button>
+                <div id="ds-abs-container" style="display:none;flex-direction:column;gap:5px;">
+                    <div class="ds-field-label">工作区目录</div>
+                    <div style="display:flex;gap:6px;align-items:center;">
+                        <code id="ds-workspace-path" style="flex:1;min-width:0;font-size:11px;color:#79a1ff;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;line-height:1.6;padding:5px 8px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.07);border-radius:6px;">（尚未选择）</code>
+                        <button id="ds-pick-btn" class="ds-btn ds-btn-secondary ds-btn-sm" style="flex:0 0 auto;white-space:nowrap;">选择</button>
                     </div>
-                    <select id="ds-recent-select" class="ds-input" style="display:none;font-size:11px;margin-top:4px;">
-                        <option value="">— 从最近使用的工作区选择 —</option>
+                    <select id="ds-recent-select" class="ds-input" style="display:none;font-size:11px;padding:5px 8px;">
+                        <option value="">— 最近使用的工作区 —</option>
                     </select>
-                    <span style="font-size:11px;color:#888;line-height:1.4;margin-top:4px;">本地服务 Token（server 启动时打印，可选）:</span>
-                    <input id="ds-token-input" class="ds-input" type="password" placeholder="留空表示不使用 token" />
+                    <div class="ds-field-label" style="margin-top:4px;">服务 Token（可选）</div>
+                    <input id="ds-token-input" class="ds-input" type="password" placeholder="留空表示不使用 token" style="padding:6px 9px;font-size:12px;" />
                 </div>
                 <div id="ds-goal-container" style="display:none;flex-direction:column;gap:6px;">
-                    <span style="font-size:11px;color:#888;">本次任务目标:</span>
-                    <input id="ds-goal-input" class="ds-input" type="text" placeholder="输入目标（留空则由 AI 自行探索）" />
-                    <span style="font-size:11px;color:#888;margin-top:4px;">启动方式:</span>
-                    <label style="font-size:12px;color:var(--dsw-alias-label-primary,#f9fafb);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="ds-start-mode" value="new" checked> 在新对话开始（推荐）
-                    </label>
-                    <label style="font-size:12px;color:var(--dsw-alias-label-primary,#f9fafb);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="radio" name="ds-start-mode" value="here"> 在当前对话内开始
-                    </label>
-                    <label id="ds-skip-prompt-label" style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;padding-left:20px;">
-                        <input type="checkbox" id="ds-skip-prompt"> 仅发送极简唤醒（工作区+目标+格式提醒，不发完整提示词）
-                    </label>
+                    <div class="ds-field-label">本次任务目标</div>
+                    <input id="ds-goal-input" class="ds-input" type="text" placeholder="留空则由 AI 自行探索" style="padding:6px 9px;font-size:12px;" />
+                    <div class="ds-field-label" style="margin-top:4px;">启动方式</div>
+                    <div class="ds-group" style="gap:5px;padding:8px;">
+                        <label class="ds-opt">
+                            <input type="radio" name="ds-start-mode" value="new" checked> 在新对话开始（推荐）
+                        </label>
+                        <label class="ds-opt">
+                            <input type="radio" name="ds-start-mode" value="here"> 在当前对话内开始
+                        </label>
+                        <label class="ds-opt ds-opt-sub" id="ds-skip-prompt-label">
+                            <input type="checkbox" id="ds-skip-prompt"> 仅发送极简唤醒
+                        </label>
+                    </div>
                 </div>
-                <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
+                <button id="ds-connect-btn" class="ds-btn ds-btn-primary" style="height:34px;font-size:13px;">开启模式</button>
             </div>
             <div id="ds-main-container" style="display:none;flex-direction:column;gap:8px;">
                 <div id="ds-tab-bar" class="ds-panel-tabs">
@@ -3272,8 +3323,8 @@ await sleep(300);
 
                 <div class="ds-tab-pane active" data-pane="interject">
                     <div style="display:flex;gap:6px;align-items:center;">
-                        <input id="ds-interject-input" class="ds-input" type="text" placeholder="插话（AI 执行时也会插队到下次结果）" style="flex:1;font-size:12px;" />
-                        <button id="ds-interject-btn" class="ds-btn ds-btn-secondary" style="white-space:nowrap;height:28px;font-size:12px;">插话</button>
+                        <input id="ds-interject-input" class="ds-input" type="text" placeholder="执行中也可插话，随下次结果发出" style="flex:1;min-width:0;font-size:12px;padding:6px 9px;" />
+                        <button id="ds-interject-btn" class="ds-btn ds-btn-secondary ds-btn-sm" style="flex:0 0 auto;white-space:nowrap;">插话</button>
                     </div>
                     <div id="ds-interject-pending" style="display:none;font-size:11px;color:#eab308;line-height:1.5;padding:6px 9px;background:rgba(234,179,8,0.08);border:1px solid rgba(234,179,8,0.3);border-left:3px solid #eab308;border-radius:6px;"></div>
                 </div>
@@ -3292,40 +3343,43 @@ await sleep(300);
                 </div>
 
                 <div class="ds-tab-pane" data-pane="action">
-                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
-                    </label>
-                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却
-                    </label>
-                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;" title="AI 回复完却没调用工具时，自动催它继续自主推进，全程无需用户操作">
-                        <input type="checkbox" id="ds-endless-toggle"> 无尽探索（AI 不调工具时自动催它继续）
-                    </label>
-                    <div style="display:flex;flex-direction:column;gap:7px;padding:9px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">
-                        <div style="font-size:11px;color:#81858c;">可调参数（改完即时生效，自动记住）</div>
-                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
-                            连续
-                            <input type="number" id="ds-param-batch-limit" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="1" max="200" step="1">
-                            次调用后冷却
+                    <div class="ds-group">
+                        <div class="ds-group-title">运行模式</div>
+                        <label class="ds-opt" title="跳过所有确认弹窗，命令与写操作直接执行">
+                            <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认）
                         </label>
-                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
-                            冷却时长
-                            <input type="number" id="ds-param-cooldown" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="0" max="600" step="1">
-                            秒
+                        <label class="ds-opt" title="连续调用达到上限后暂停冷却，降低被限流风险">
+                            <input type="checkbox" id="ds-throttle-toggle" checked> 防封控冷却
                         </label>
-                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
-                            每轮回传前等待
-                            <input type="number" id="ds-param-pre-wait" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="0" max="600" step="1">
-                            秒
+                        <label class="ds-opt" title="AI 回复完却没调用工具时，自动催它继续自主推进，全程无需用户操作">
+                            <input type="checkbox" id="ds-endless-toggle"> 无尽探索（AI 停手时自动催促）
                         </label>
                     </div>
-                    <div style="display:flex;gap:6px;">
-                        <button id="ds-pause-btn" class="ds-btn ds-btn-secondary" style="flex:1;">暂停执行</button>
-                        <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger" style="flex:1;">断开连接</button>
+                    <div class="ds-group">
+                        <div class="ds-group-title">节流参数</div>
+                        <div class="ds-num-row">
+                            <span style="flex:1;">连续调用</span>
+                            <input type="number" id="ds-param-batch-limit" class="ds-input" min="1" max="200" step="1">
+                            <span>次后冷却</span>
+                        </div>
+                        <div class="ds-num-row">
+                            <span style="flex:1;">冷却时长</span>
+                            <input type="number" id="ds-param-cooldown" class="ds-input" min="0" max="600" step="1">
+                            <span>秒</span>
+                        </div>
+                        <div class="ds-num-row">
+                            <span style="flex:1;">回传前等待</span>
+                            <input type="number" id="ds-param-pre-wait" class="ds-input" min="0" max="600" step="1">
+                            <span>秒</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary" style="width:100%;">插件管理</button>`;
+                <div id="ds-bottom-bar" class="ds-bottom-bar">
+                    <button id="ds-pause-btn" class="ds-btn ds-btn-secondary ds-btn-sm">暂停执行</button>
+                    <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary ds-btn-sm">插件管理</button>
+                    <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger ds-btn-sm">断开</button>
+                </div>
+            </div>`;
         // ===== 模式挂载���侧边栏 / 悬浮三窗口 =====
         function fwLoadRect(key, def) {
             const r = Object.assign({}, def);
@@ -3802,7 +3856,7 @@ await sleep(300);
                 const skipPrompt = !!(skipPromptEl && skipPromptEl.checked);
 
                 if (startMode === 'here') {
-                    log('启动方式: 当前对话内开始');
+                    log('启动���式: 当前对话内开始');
                     // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防��新后重跑历史）
                     ignoreKeys.clear();
                     pickAll(SEL.virtualItem).forEach(el => {
