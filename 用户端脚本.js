@@ -382,7 +382,23 @@
             padding-top: 8px; margin-top: 2px;
             border-top: 1px solid rgba(255,255,255,0.08);
         }
-        .ds-btn-sm { height: 28px !important; padding: 0 10px !important; font-size: 12px !important; flex: 1 1 0; min-width: 0; }
+        .ds-btn-sm { height: 28px !important; padding: 0 8px !important; font-size: 12px !important; flex: 1 1 0; min-width: 0; white-space: nowrap; }
+        /* 可折叠分组 */
+        #ds-local-panel .ds-group.ds-collapsible { display: block; padding: 8px 10px; }
+        #ds-local-panel .ds-collapsible > summary {
+            list-style: none; cursor: pointer; user-select: none;
+            display: flex; align-items: center; gap: 5px;
+            font-size: 11px; font-weight: 600; color: #9aa3ae; letter-spacing: .3px;
+            transition: color .15s;
+        }
+        #ds-local-panel .ds-collapsible > summary::-webkit-details-marker { display: none; }
+        #ds-local-panel .ds-collapsible > summary::before {
+            content: '▸'; font-size: 9px; color: #79a1ff;
+            transition: transform .15s ease; display: inline-block;
+        }
+        #ds-local-panel .ds-collapsible[open] > summary::before { transform: rotate(90deg); }
+        #ds-local-panel .ds-collapsible > summary:hover { color: #c7ccd4; }
+        #ds-local-panel .ds-collapsible-body { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
         /* 复选框/单选框统一着色与大小 */
         #ds-local-panel input[type="checkbox"],
         #ds-local-panel input[type="radio"] { accent-color: #3964fe; width: 13px; height: 13px; margin: 0; flex-shrink: 0; cursor: pointer; }
@@ -3343,40 +3359,44 @@ await sleep(300);
                 </div>
 
                 <div class="ds-tab-pane" data-pane="action">
-                    <div class="ds-group">
-                        <div class="ds-group-title">运行模式</div>
-                        <label class="ds-opt" title="跳过所有确认弹窗，命令与写操作直接执行">
-                            <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认）
-                        </label>
-                        <label class="ds-opt" title="连续调用达到上限后暂停冷却，降低被限流风险">
-                            <input type="checkbox" id="ds-throttle-toggle" checked> 防封控冷却
-                        </label>
-                        <label class="ds-opt" title="AI 回复完却没调用工具时，自动催它继续自主推进，全程无需用户操作">
-                            <input type="checkbox" id="ds-endless-toggle"> 无尽探索（AI 停手时自动催促）
-                        </label>
-                    </div>
-                    <div class="ds-group">
-                        <div class="ds-group-title">节流参数</div>
-                        <div class="ds-num-row">
-                            <span style="flex:1;">连续调用</span>
-                            <input type="number" id="ds-param-batch-limit" class="ds-input" min="1" max="200" step="1">
-                            <span>次后冷却</span>
+                    <details class="ds-group ds-collapsible">
+                        <summary>运行模式</summary>
+                        <div class="ds-collapsible-body">
+                            <label class="ds-opt" title="跳过所有确认弹窗，命令与写操作直接执行">
+                                <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认）
+                            </label>
+                            <label class="ds-opt" title="连续调用达到上限后暂停冷却，降低被限流风险">
+                                <input type="checkbox" id="ds-throttle-toggle" checked> 防封控冷却
+                            </label>
+                            <label class="ds-opt" title="AI 回复完却没调用工具时，自动催它继续自主推进，全程无需用户操作">
+                                <input type="checkbox" id="ds-endless-toggle"> 无尽探索（AI 停手时自动催促）
+                            </label>
                         </div>
-                        <div class="ds-num-row">
-                            <span style="flex:1;">冷却时长</span>
-                            <input type="number" id="ds-param-cooldown" class="ds-input" min="0" max="600" step="1">
-                            <span>秒</span>
+                    </details>
+                    <details class="ds-group ds-collapsible">
+                        <summary>节流参数</summary>
+                        <div class="ds-collapsible-body">
+                            <div class="ds-num-row">
+                                <span style="flex:1;">连续调用</span>
+                                <input type="number" id="ds-param-batch-limit" class="ds-input" min="1" max="200" step="1">
+                                <span>次后冷却</span>
+                            </div>
+                            <div class="ds-num-row">
+                                <span style="flex:1;">冷却时长</span>
+                                <input type="number" id="ds-param-cooldown" class="ds-input" min="0" max="600" step="1">
+                                <span>秒</span>
+                            </div>
+                            <div class="ds-num-row">
+                                <span style="flex:1;">回传前等待</span>
+                                <input type="number" id="ds-param-pre-wait" class="ds-input" min="0" max="600" step="1">
+                                <span>秒</span>
+                            </div>
                         </div>
-                        <div class="ds-num-row">
-                            <span style="flex:1;">回传前等待</span>
-                            <input type="number" id="ds-param-pre-wait" class="ds-input" min="0" max="600" step="1">
-                            <span>秒</span>
-                        </div>
-                    </div>
+                    </details>
                 </div>
                 <div id="ds-bottom-bar" class="ds-bottom-bar">
-                    <button id="ds-pause-btn" class="ds-btn ds-btn-secondary ds-btn-sm">暂停执行</button>
-                    <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary ds-btn-sm">插件管理</button>
+                    <button id="ds-pause-btn" class="ds-btn ds-btn-secondary ds-btn-sm">暂停</button>
+                    <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary ds-btn-sm">插件</button>
                     <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger ds-btn-sm">断开</button>
                 </div>
             </div>`;
