@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek 本地互联
 // @namespace    http://tampermonkey.net/
-// @version      3.5
+// @version      3.6
 // @description  基于工作区文件的本地智能体扩展系统（插件参数表统一 + attach 自动发送 + 静默结束判定 + 双重折叠）
 // @author       You
 // @match        https://chat.deepseek.com/*
@@ -41,8 +41,13 @@
     let toolcallCounter = 0;   // 连续执行的 toolcall 累计数，达标后冷却
     let isCoolingDown = false; // 批次冷却中
     let autoThrottle = true;   // 是否开启防封控冷却
-    const BATCH_LIMIT = 10;    // 达到该数量后，下批执行前冷却
-    const BATCH_COOLDOWN_MS = 15000; // 冷却时长
+    // ===== 可调参数（网页「操作」页可实时修改，存 localStorage）=====
+    let batchLimit = 25;            // 连续执行多少个工具后触发冷却
+    let batchCooldownMs = 20000;    // 冷却时长（毫秒）
+    let preReturnWaitMs = 3000;     // 每轮结果回传前额外等待（毫秒）
+    const BATCH_LIMIT_MIN = 1, BATCH_LIMIT_MAX = 200;
+    const COOLDOWN_SEC_MIN = 0, COOLDOWN_SEC_MAX = 600;
+    const PRE_WAIT_SEC_MIN = 0, PRE_WAIT_SEC_MAX = 600;
     const SEND_RETRY_MS = 10000;     // 回传失败自动重试间隔
     let processingStart = 0, cooldownTimer = null;
     let absPath = '', autoMode = false;
@@ -69,7 +74,24 @@
         try { localStorage.setItem(WORKSPACES_KEY, JSON.stringify(list)); } catch {}
     }
     function saveState() {
-        try { localStorage.setItem(STATE_KEY, JSON.stringify({ isModeOn, absPath, lastGoal, autoMode, autoThrottle })); } catch {}
+        try { localStorage.setItem(STATE_KEY, JSON.stringify({ isModeOn, absPath, lastGoal, autoMode, autoThrottle, batchLimit, batchCooldownMs, preReturnWaitMs })); } catch {}
+    }
+    // 从状态对象读取并夹紧三个可调参数
+    const clampNum = (v, min, max, def) => {
+        const n = Number(v);
+        if (!isFinite(n)) return def;
+        return Math.max(min, Math.min(max, Math.round(n)));
+    };
+    function applyTunables(st) {
+        if (!st || typeof st !== 'object') return false;
+        let changed = false;
+        const bl = clampNum(st.batchLimit, BATCH_LIMIT_MIN, BATCH_LIMIT_MAX, 25);
+        const cd = clampNum(st.batchCooldownMs, COOLDOWN_SEC_MIN * 1000, COOLDOWN_SEC_MAX * 1000, 20000);
+        const pw = clampNum(st.preReturnWaitMs, PRE_WAIT_SEC_MIN * 1000, PRE_WAIT_SEC_MAX * 1000, 3000);
+        if (bl !== batchLimit) { batchLimit = bl; changed = true; }
+        if (cd !== batchCooldownMs) { batchCooldownMs = cd; changed = true; }
+        if (pw !== preReturnWaitMs) { preReturnWaitMs = pw; changed = true; }
+        return changed;
     }
     function loadState() {
         try { return JSON.parse(localStorage.getItem(STATE_KEY) || 'null'); } catch { return null; }
@@ -599,7 +621,7 @@ ${taskGoal}
 当你发现现有工具无法满足需求时，可以自己编写插件扩展能力。分为两种：
 
 方式 A：前端临时插件（刷新页面失效）
-通过 register_plugin 注册，直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
+通过 register_plugin 注册，直接在下一轮使用。插件代码���须返回一个包含 execute 函数的对象，例如：
 <plugin_js><![CDATA[
 ({
     name: 'my_tool',
@@ -885,7 +907,7 @@ ${getPluginsPrompt()}
         pres.forEach(pre => {
             const text = pre.textContent || '';
             if (!text.includes('<toolcall>')) return;
-            // 只折叠真正的代码块（有 md-code-block 父级），裸 XML 留给 parseToolcalls 拦截
+            // 只折叠真正�������������代码块（有 md-code-block 父级），裸 XML 留给 parseToolcalls 拦截
             if (!pre.closest('.md-code-block')) return;
             const sig = String(text.length) + '_' + hashStr(text);
             if (pre.getAttribute('data-ds-folded') === sig) return;
@@ -944,8 +966,16 @@ ${getPluginsPrompt()}
     // ===== 工具参数可视化 + 插件自定义渲染 =====
     // 插件可注册：W.DS_ToolRenderers['edit'] = (call) => '<div>自定义HTML</div>'  (返回 null 则用默认)
     W.DS_ToolRenderers = W.DS_ToolRenderers || {};
-    const PARAM_KEYS = ['path','from','to','pattern','command','url','method','question','line','mode','timeout','find','replace','old','new','content','headers','text','actions','plugin_name','plugin_js'];
-    const PARAM_LABELS = { path:'路径', from:'源', to:'目标', pattern:'匹配', command:'命令', url:'URL', method:'方法', question:'问题', line:'行号', mode:'模式', timeout:'超时', find:'查找', replace:'替换', old:'原内容', new:'新内容', content:'内容', headers:'请求头', text:'文本', actions:'批量操作', plugin_name:'插件名', plugin_js:'插件代码' };
+    const PARAM_KEYS = ['path','from','to','pattern','command','url','method','question','line','lineEnd','lines','offset','limit','mode','timeout','find','replace','old','new','content','headers','text','actions','plugin_name','plugin_js','tree','depth','filter','context','regex','name','saveTo','pid','port','cwd','force','paths'];
+    const PARAM_LABELS = {
+        path:'路径', from:'源', to:'目标', pattern:'匹配', command:'命令', url:'URL', method:'方法',
+        question:'问题', line:'起始行', lineEnd:'结束行', lines:'行数', offset:'字符偏移', limit:'读取上限',
+        mode:'模式', timeout:'超时(毫秒)', find:'查找', replace:'替换', old:'原内容', new:'新内容',
+        content:'内容', headers:'请求头', text:'文本', actions:'批量操作', plugin_name:'插件名', plugin_js:'插件代码',
+        tree:'递归目录树', depth:'目录深度', filter:'扩展名过滤', context:'上下文行数', regex:'正则模式',
+        name:'名称', saveTo:'保存到', pid:'进程ID', port:'端口', cwd:'工作目录', force:'强制允许',
+        paths:'文件列表'
+    };
     function clipVal(s, n) {
         s = String(s == null ? '' : s);
         const oneLine = s.length > 300 ? s.slice(0, 300) + ' …(' + s.length + '字)' : s;
@@ -1018,7 +1048,9 @@ ${getPluginsPrompt()}
                 container.className = 'ds-user-tool-card ds-fold-list';
 
                 // 解析每一条 [成功] / [失败] / [取消]
-                const blocks = text.split('\n\n');
+                // 修复：首块带【系统执行结果】标题会使 ^\[成功\] 匹配失败，导致第一个调用结果丢失
+                const bodyText = text.replace(/^\s*【系统执行结果】\s*\n?/, '');
+                const blocks = bodyText.split('\n\n');
                 let addedCount = 0;
                 for (const block of blocks) {
                     const match = block.match(/^\[(成功|失败|取消)\]\s+(\w+)(?:\s+\(([^)]+)\))?:\n([\s\S]*)$/);
@@ -1218,7 +1250,7 @@ ${getPluginsPrompt()}
         });
 
         // 2) 扫描散落在正文（非 pre / 非行内 code）的裸 XML
-        //    启发式：块内必须同时含 op 开闭标签，避免把正文里讨论格式的文字误判为调用
+        //    启发式：块内�����须同时含 op 开闭标签，避免把正文里讨论格式的文字误判为调用
         try {
             const loose = [];
             const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null);
@@ -2092,7 +2124,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         return `已休眠 ${ms}ms`;
     }
 
-    // ===== 服务端插件回传的 DOM 指令执行器 =====
+    // ===== 服务端���件回传的 DOM 指令执行器 =====
     // 服务端插件在 execute 中返回 { __dom: ['js代码', ...], message } 时，
     // server.js 会把指令透传到前端，这里在页面上下文内逐条执行。
     // 与前端插件的区别：代码由 Node 进程生成，能结合本地文件/命令的结果来渲染 UI。
@@ -2261,14 +2293,6 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
             interjectQueue.length = 0;
             try { renderInterjectPending(); } catch {}
         }
-        text += [
-            "【每轮必读·格式自查】",
-            "1. 每个工具调用都必须包在三反引号代码块里（开头 ```toolcall，结尾 ```），块内放完整 <toolcall>...</toolcall>。",
-            "2. 代码块外裸写 <toolcall> 会被系统直接拒绝，本轮调用白费。",
-            "3. 发送前自查：你写的每个 <toolcall> 前面是不是都有 ```toolcall 那一行？结尾有没有三个反引号？",
-            "4. 多个调用 = 多个独立的 ```toolcall 代码块，不要塞进同一个块。",
-            "示例（照抄这个结构）：```toolcall / <toolcall> / <op>工具名</op> / <参数>值</参数> / </toolcall> / ```"
-        ].join("\n");
         return text;
     }
 
@@ -2373,7 +2397,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         }
     }
 
-    // ===== 插话排队发送：等 AI 空闲（未生成中、发送按钮可用）才发 =====
+    // ===== 插话排队发送：等 AI 空闲（未生成中、发送���钮可用）才发 =====
     // （状态变量在文件顶部 interjectQueue 旁声明，避免 TDZ 问题）
 
     // 判断 AI 当前是否在生成回复：与 sendMessage 内判定保持一致
@@ -2481,15 +2505,15 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         if (!toExec.length) return;
 
         // 连续执行达到上限后，下一批开始前强制冷却，避免请求频率过高被封控
-        if (autoThrottle && toolcallCounter >= BATCH_LIMIT) {
+        if (autoThrottle && toolcallCounter >= batchLimit) {
             isCoolingDown = true;
             isProcessing = true;              // 冷却期间占住处理锁，防止 poll 重入
             processingStart = Date.now();
-            const sec = Math.round(BATCH_COOLDOWN_MS / 1000);
+            const sec = Math.round(batchCooldownMs / 1000);
             log(`⚠ 已连续执行 ${toolcallCounter} 个工具，暂停 ${sec}s 冷却后再继续（防频率限制）`);
             dsSetStatus('working', `防封控冷却中 ${sec}s`);
             showToast('warning', `频率保护：已连续执行 ${toolcallCounter} 个工具，暂停 ${sec} 秒冷却...`, 3000);
-            await sleep(BATCH_COOLDOWN_MS);
+            await sleep(batchCooldownMs);
             toolcallCounter = 0;
             isCoolingDown = false;
             isProcessing = false;
@@ -2594,6 +2618,21 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         await flushBatch();
         setProgress(progressTotal, progressTotal, '执行完成');
         setTimeout(hideProgress, 1200);
+
+        // 回传前等待（可调）：给 AI 侧留出喘息时间，降低连续请求触发限流的概率
+        if (preReturnWaitMs > 0) {
+            const waitSec = Math.round(preReturnWaitMs / 1000);
+            dsSetStatus('working', `回传前等待 ${waitSec}s`);
+            log(`回传前等待 ${waitSec}s（可在操作页调整）`);
+            let leftMs = preReturnWaitMs;
+            while (leftMs > 0) {
+                const chunk = Math.min(leftMs, 1000);
+                await sleep(chunk);
+                leftMs -= chunk;
+                processingStart = Date.now(); // 刷新超时基准，避免长等待被误判为卡死
+                if (!isModeOn) break;         // 中途断开则立即放弃等待
+            }
+        }
 
 // 附件回传：attach 只把文件附加到输入框，这里把工具结果文字连同附件一起发出（同一条消息）。
         const hasAttach = results.some(r => r.op === 'attach');
@@ -3133,8 +3172,26 @@ await sleep(300);
                         <input type="checkbox" id="ds-auto-toggle"> 完全权限（跳过确认/自动执行命令）
                     </label>
                     <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
-                        <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却（连续10次后暂停）
+                        <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却
                     </label>
+                    <div style="display:flex;flex-direction:column;gap:7px;padding:9px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">
+                        <div style="font-size:11px;color:#81858c;">可调参数（改完即时生效，自动记住）</div>
+                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
+                            连续
+                            <input type="number" id="ds-param-batch-limit" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="1" max="200" step="1">
+                            次调用后冷却
+                        </label>
+                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
+                            冷却时长
+                            <input type="number" id="ds-param-cooldown" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="0" max="600" step="1">
+                            秒
+                        </label>
+                        <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;">
+                            每轮回传前等待
+                            <input type="number" id="ds-param-pre-wait" class="ds-input" style="width:70px;padding:4px 8px;font-size:12px;" min="0" max="600" step="1">
+                            秒
+                        </label>
+                    </div>
                     <div style="display:flex;gap:6px;">
                         <button id="ds-pause-btn" class="ds-btn ds-btn-secondary" style="flex:1;">暂停执行</button>
                         <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger" style="flex:1;">断开连接</button>
@@ -3142,7 +3199,7 @@ await sleep(300);
                 </div>
             </div>
             <button id="ds-plugin-menu-btn" class="ds-btn ds-btn-secondary" style="width:100%;">插件管理</button>`;
-        // ===== 模式挂载：侧边栏 / 悬浮三窗口 =====
+        // ===== 模式挂载���侧边栏 / 悬浮三窗口 =====
         function fwLoadRect(key, def) {
             const r = Object.assign({}, def);
             r.left = Math.max(0, Math.min(window.innerWidth - 80, Number(r.left) || 0));
@@ -3386,6 +3443,36 @@ await sleep(300);
         autoToggle.addEventListener('change', () => { autoMode = autoToggle.checked; saveState(); });
         throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; saveState(); });
 
+        // ===== 可调参数输入框：改完即时生效并持久化 =====
+        const paramBatchLimitEl = $('ds-param-batch-limit');
+        const paramCooldownEl = $('ds-param-cooldown');
+        const paramPreWaitEl = $('ds-param-pre-wait');
+        function syncParamInputs() {
+            if (paramBatchLimitEl) paramBatchLimitEl.value = Math.round(batchLimit);
+            if (paramCooldownEl) paramCooldownEl.value = Math.round(batchCooldownMs / 1000);
+            if (paramPreWaitEl) paramPreWaitEl.value = Math.round(preReturnWaitMs / 1000);
+        }
+        function bindParamInput(el, apply, min, max, unitMs) {
+            if (!el) return;
+            const commit = () => {
+                const raw = el.value.trim();
+                if (raw === '') { syncParamInputs(); return; }
+                const n = clampNum(raw, min, max, NaN);
+                if (!isFinite(n)) { syncParamInputs(); return; }
+                apply(unitMs ? n * 1000 : n);
+                syncParamInputs();
+                saveState();
+                log(`参数已更新：${el.id} = ${n}`);
+            };
+            el.addEventListener('change', commit);
+            el.addEventListener('blur', commit);
+            el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); el.blur(); } });
+        }
+        bindParamInput(paramBatchLimitEl, (v) => { batchLimit = v; }, BATCH_LIMIT_MIN, BATCH_LIMIT_MAX, false);
+        bindParamInput(paramCooldownEl, (v) => { batchCooldownMs = v; }, COOLDOWN_SEC_MIN, COOLDOWN_SEC_MAX, true);
+        bindParamInput(paramPreWaitEl, (v) => { preReturnWaitMs = v; }, PRE_WAIT_SEC_MIN, PRE_WAIT_SEC_MAX, true);
+        syncParamInputs();
+
         pauseBtn.addEventListener('click', () => {
             isPaused = !isPaused;
             if (isPaused) {
@@ -3550,7 +3637,7 @@ await sleep(300);
 
                 if (startMode === 'here') {
                     log('启动方式: 当前对话内开始');
-                    // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防刷新后重跑历史）
+                    // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防��新后重跑历史）
                     ignoreKeys.clear();
                     pickAll(SEL.virtualItem).forEach(el => {
                         const k = el.getAttribute('data-virtual-list-item-key');
@@ -3626,6 +3713,10 @@ await sleep(300);
             autoToggle.checked = false;
             throttleToggle.checked = true;
             autoThrottle = true;
+            batchLimit = 25;
+            batchCooldownMs = 20000;
+            preReturnWaitMs = 3000;
+            try { syncParamInputs(); } catch {}
             dsSetStatus('none', '已断开');
             setupContainer.style.display = 'flex';
             mainContainer.style.display = 'none';
@@ -3646,7 +3737,9 @@ await sleep(300);
                 throttleToggle.checked = st.autoThrottle !== false;
                 autoMode = !!st.autoMode;
                 autoThrottle = st.autoThrottle !== false;
-                log('已恢复上次的配置（工作区/目标/开关），点击"开启模式"继续');
+                applyTunables(st);
+                try { syncParamInputs(); } catch {}
+                log('已恢复上次的配置（工作区/目标/开关/可调参数），点击"开启模式"继续');
             }
             refreshRecentSelect();
         } catch {}
@@ -3986,71 +4079,5 @@ injectSkillBtn();
     setTimeout(passiveScan, 200);
     setInterval(passiveScan, 800);
 
-    // ===== 「消息发送过于频繁」自动重试（精确定位版）=====
-    // 真实 DOM 结构（来自实际页面）：
-    //   <div class="d29f3d7d ds-message" data-ds-hidden="true">
-    //     <div class="fbb737a4">结果文本</div>
-    //     <div role="button" class="ds-button ds-button--warning ds-button--filled ds-button--circle ...">
-    //       <svg>循环箭头</svg>   ← 重试按钮在这里
-    //     </div>
-    //   </div>
-    //   <div class="_11d6b3a"><span>消息发送过于频繁，请稍后重试</span>...</div>
-    //
-    // 关键教训：重试按钮「不在」频繁文案的子树里，而是同级（前一个消息块里）。
-    // 从文案向上爬父节点找 role=button，会先撞到文案块里的「复制」按钮 —— 之前点错就错在这。
-    // 正确做法：直接按语义类名取 warning 圆形按钮，再用所在块文本校验是否为频繁提示。
-    const FREQ_RETRY_MS = 10000; // 两次点击最小间隔（10 秒）
-    const FREQ_SCAN_MS = 1000;   // 扫描间隔
-    const FREQ_TEXT_RE = /消息发送过于频繁|发送过于频繁|请稍后重试|too many requests|rate limit/i;
-    let freqLastClick = 0;
-    let freqClickCount = 0;
-
-    function fireRealClick(el) {
-        if (!el) return;
-        let r = { left: 0, top: 0, width: 0, height: 0 };
-        try { r = el.getBoundingClientRect() || r; } catch (e) {}
-        const x = Math.round((r.left || 0) + (r.width || 0) / 2) || 8;
-        const y = Math.round((r.top || 0) + (r.height || 0) / 2) || 8;
-        const PE = W.PointerEvent || MouseEvent;
-        const types = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-        for (const type of types) {
-            try {
-                const Ev = type.indexOf('pointer') === 0 ? PE : MouseEvent;
-                el.dispatchEvent(new Ev(type, {
-                    bubbles: true, cancelable: true, composed: true,
-                    view: window, clientX: x, clientY: y, button: 0, buttons: 1
-                }));
-            } catch (e) {}
-        }
-        try { if (typeof el.click === 'function') el.click(); } catch (e) {}
-    }
-
-    // 返回当前需要点击的「重试」按钮；没有频繁提示或找不到按钮时返回 null
-    function findFreqRetryButton() {
-        const btns = document.querySelectorAll('div[role="button"].ds-button--warning.ds-button--circle');
-        if (!btns.length) return null;
-        // 从后往前找（最新的提示在页面底部）
-        for (let i = btns.length - 1; i >= 0; i--) {
-            const btn = btns[i];
-            const scope = btn.closest('[data-virtual-list-item-key]') || btn.parentElement;
-            const txt = scope ? (scope.textContent || '') : '';
-            if (FREQ_TEXT_RE.test(txt)) return btn;
-        }
-        return null;
-    }
-
-    setInterval(() => {
-        try {
-            const btn = findFreqRetryButton();
-            if (!btn) return; // 没有频繁提示：不动作
-            const now = Date.now();
-            if (now - freqLastClick < FREQ_RETRY_MS) return; // 未到 10 秒，等待
-            freqLastClick = now;
-            freqClickCount++;
-            fireRealClick(btn);
-            log('检测到「消息发送过于频繁」，已点击重试按钮（第 ' + freqClickCount + ' 次）');
-            try { showToast?.('warning', '发送频繁，已自动重试', 2500); } catch (e) {}
-        } catch (e) { log('频繁重试监控异常: ' + ((e && e.message) || e)); }
-    }, FREQ_SCAN_MS);
-
+    // 「消息发送过于频繁」自动点击重试按钮功能已移除（避免误点重试按钮）
 })();

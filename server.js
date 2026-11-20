@@ -144,7 +144,10 @@ const EXEC_TIMEOUT = 30000;
 const FETCH_TIMEOUT = 30000;
 const MAX_FETCH_RESP = 10 * 1024 * 1024;
 
-const ALLOWED_ORIGINS = new Set(['https://chat.deepseek.com']);
+const ALLOWED_ORIGINS = new Set([
+    'https://chat.deepseek.com',
+    'https://yuanbao.tencent.com',
+]);
 const TOKEN = process.env.DS_AGENT_TOKEN || crypto.randomBytes(24).toString('hex');
 const REQUIRE_TOKEN = process.env.DS_AGENT_ALLOW_NO_TOKEN !== '1';
 
