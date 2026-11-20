@@ -714,7 +714,7 @@ ${taskGoal}
 当你发现现有工具无法满足需求时，可以自己编写插件扩展能力。分为两种：
 
 方式 A：前端临时插件（刷新页面失效）
-通过 register_plugin 注册，直接在下一轮使用。插件代码���须返回一个包含 execute 函数的对象，例如：
+通过 register_plugin 注册，直接在下一轮使用。插件代码必须返回一个包含 execute 函数的对象，例如：
 <plugin_js><![CDATA[
 ({
     name: 'my_tool',
@@ -1000,7 +1000,7 @@ ${getPluginsPrompt()}
         pres.forEach(pre => {
             const text = pre.textContent || '';
             if (!text.includes('<toolcall>')) return;
-            // 只折叠真正�������������代码块（有 md-code-block 父级），裸 XML 留给 parseToolcalls 拦截
+            // 只折叠真正的代码块（有 md-code-block 父级），裸 XML 留给 parseToolcalls 拦截
             if (!pre.closest('.md-code-block')) return;
             const sig = String(text.length) + '_' + hashStr(text);
             if (pre.getAttribute('data-ds-folded') === sig) return;
@@ -1343,7 +1343,7 @@ ${getPluginsPrompt()}
         });
 
         // 2) 扫描散落在正文（非 pre / 非行内 code）的裸 XML
-        //    启发式：块内�����须同时含 op 开闭标签，避免把正文里讨论格式的文字误判为调用
+        //    启发式：块内必须同时含 op 开闭标签，避免把正文里讨论格式的文字误判为调用
         try {
             const loose = [];
             const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null);
@@ -2134,10 +2134,10 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         const source = String(call.source || call.path || ex.source || ex.path || '').trim();
         if (!name) throw new ToolError('参数校验', '缺少 plugin_name', '示例：<plugin_name>my_tool</plugin_name>');
         if (!source) throw new ToolError('参数校验', '缺少 source', '先用 writefile 把插件代码写到工作区，再用 <source>相对路径</source> 指向它');
-        // 挂载插件会把�����码载入服务端进程执行：非完全权限模式必须确认
+        // 挂载插件会把代码载入服务端进程执行：非完全权限模式必须确认
         if (!autoMode) {
             if (!await showConfirmDialog('挂载服务端插件', name, call.reason,
-                `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/�����络访问权限。</div>`))
+                `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/网络访问权限。</div>`))
                 throw new ToolError('用户确认', '用户取消了插件挂载', '');
         }
 
@@ -2145,7 +2145,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         let data = {};
         try { data = await resp.json(); } catch (e) {}
         if (!resp.ok || data.error) {
-            throw new ToolError('挂���插件', data.error || `HTTP ${resp.status}`, '检查插件代码与 name 是否一致（name 需与文件名同形）');
+            throw new ToolError('挂载插件', data.error || `HTTP ${resp.status}`, '检查插件代码与 name 是否一致（name 需与文件名同形）');
         }
         if (data.plugins) W.serverPlugins = data.plugins;
         const act = data.action === 'updated' ? '已更新' : '已创建';
@@ -2217,7 +2217,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         return `已休眠 ${ms}ms`;
     }
 
-    // ===== 服务端���件回传的 DOM 指令执行器 =====
+    // ===== 服务端插件回传的 DOM 指令执行器 =====
     // 服务端插件在 execute 中返回 { __dom: ['js代码', ...], message } 时，
     // server.js 会把指令透传到前端，这里在页面上下文内逐条执行。
     // 与前端插件的区别：代码由 Node 进程生成，能结合本地文件/命令的结果来渲染 UI。
@@ -2490,7 +2490,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         }
     }
 
-    // ===== 插话排队发送：等 AI 空闲（未生成中、发送���钮可用）才发 =====
+    // ===== 插话排队发送：等 AI 空闲（未生成中、发送按钮可用）才发 =====
     // （状态变量在文件顶部 interjectQueue 旁声明，避免 TDZ 问题）
 
     // 判断 AI 当前是否在生成回复：与 sendMessage 内判定保持一致
@@ -2844,7 +2844,7 @@ await sleep(300);
             }
             if (!sent) {
                 retryCount++;
-                log(`回传失败（${lastReason}��，10 秒后自动重试（第 ${retryCount} 次）...`);
+                log(`回传失败（${lastReason}），10 秒后自动重试（第 ${retryCount} 次）...`);
                 showToast('warning', `网络波动，回传失败。10 秒后自动重试...`, 3000);
                 dsSetStatus('working', '自动重试中');
                 await sleep(SEND_RETRY_MS);
@@ -3400,7 +3400,7 @@ await sleep(300);
                     <button id="ds-disconnect-btn" class="ds-btn ds-btn-danger ds-btn-sm">断开</button>
                 </div>
             </div>`;
-        // ===== 模式挂载���侧边栏 / 悬浮三窗口 =====
+        // ===== 模式挂载：侧边栏 / 悬浮三窗口 =====
         function fwLoadRect(key, def) {
             const r = Object.assign({}, def);
             r.left = Math.max(0, Math.min(window.innerWidth - 80, Number(r.left) || 0));
@@ -3876,8 +3876,8 @@ await sleep(300);
                 const skipPrompt = !!(skipPromptEl && skipPromptEl.checked);
 
                 if (startMode === 'here') {
-                    log('启动���式: 当前对话内开始');
-                    // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防��新后重跑历史）
+                    log('启动方式: 当前对话内开始');
+                    // 快照：启动前页面上已存在的消息，其工具调用一律不再执行（防刷新后重跑历史）
                     ignoreKeys.clear();
                     pickAll(SEL.virtualItem).forEach(el => {
                         const k = el.getAttribute('data-virtual-list-item-key');
@@ -3936,7 +3936,14 @@ await sleep(300);
             }
         });
 
-        disconnectBtn.addEventListener('click', () => {
+        disconnectBtn.addEventListener('click', async () => {
+            // 断开是破坏性操作：清状态、停监听、丢待执行结果，先确认
+            const okToDisconnect = await showConfirmDialog(
+                '确认断开连接？',
+                absPath || '（当前工作区）',
+                '断开后将停止监听 AI 回复、清空待执行与待回传结果，未保存的执行进度会丢失。'
+            );
+            if (!okToDisconnect) return;
             step = 0; isModeOn = false;
             isProcessing = false; isCooldown = false; isCompressing = false; autoMode = false;
             processingStart = 0;
