@@ -45,6 +45,8 @@
     let batchLimit = 25;            // 连续执行多少个工具后触发冷却
     let batchCooldownMs = 20000;    // 冷却时长（毫秒）
     let preReturnWaitMs = 3000;     // 每轮结果回传前额外等待（毫秒）
+    let endlessExplore = false;     // 无尽探索：AI 不调工具时自动催它继续自主推进
+    let endlessExploreGapMs = 5000; // 两次自动催促的最小间隔（毫秒）
     const BATCH_LIMIT_MIN = 1, BATCH_LIMIT_MAX = 200;
     const COOLDOWN_SEC_MIN = 0, COOLDOWN_SEC_MAX = 600;
     const PRE_WAIT_SEC_MIN = 0, PRE_WAIT_SEC_MAX = 600;
@@ -74,7 +76,7 @@
         try { localStorage.setItem(WORKSPACES_KEY, JSON.stringify(list)); } catch {}
     }
     function saveState() {
-        try { localStorage.setItem(STATE_KEY, JSON.stringify({ isModeOn, absPath, lastGoal, autoMode, autoThrottle, batchLimit, batchCooldownMs, preReturnWaitMs })); } catch {}
+        try { localStorage.setItem(STATE_KEY, JSON.stringify({ isModeOn, absPath, lastGoal, autoMode, autoThrottle, batchLimit, batchCooldownMs, preReturnWaitMs, endlessExplore, endlessExploreGapMs })); } catch {}
     }
     // 从状态对象读取并夹紧三个可调参数
     const clampNum = (v, min, max, def) => {
@@ -91,6 +93,9 @@
         if (bl !== batchLimit) { batchLimit = bl; changed = true; }
         if (cd !== batchCooldownMs) { batchCooldownMs = cd; changed = true; }
         if (pw !== preReturnWaitMs) { preReturnWaitMs = pw; changed = true; }
+        if (typeof st.endlessExplore === 'boolean' && st.endlessExplore !== endlessExplore) { endlessExplore = st.endlessExplore; changed = true; }
+        const eg = clampNum(st.endlessExploreGapMs, 1000, 600000, 5000);
+        if (eg !== endlessExploreGapMs) { endlessExploreGapMs = eg; changed = true; }
         return changed;
     }
     function loadState() {
@@ -347,8 +352,29 @@
         .ds-result-label { color: #10b981; }
 
         /* ===== 悬浮三窗口 ===== */
-        #ds-tab-bar { display: none !important; }
         .ds-tab-pane { display: flex; flex-direction: column; gap: 8px; }
+        /* 选项卡标签栏：侧栏模式启用（避免三个面板全堆着挤占空间） */
+        .ds-panel-tabs {
+            display: flex; gap: 4px; flex-shrink: 0;
+            padding: 3px; background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.07); border-radius: 8px;
+        }
+        .ds-tab-btn {
+            flex: 1 1 0; min-width: 0; height: 26px; padding: 0 6px;
+            border: none; border-radius: 6px; background: transparent;
+            color: #81858c; font-size: 12px; font-family: inherit; cursor: pointer;
+            transition: background-color .15s, color .15s; white-space: nowrap;
+        }
+        .ds-tab-btn:hover { background: rgba(255,255,255,0.07); color: #c7ccd4; }
+        .ds-tab-btn.active { background: rgba(57,100,254,0.22); color: #79a1ff; font-weight: 600; }
+        /* 侧栏模式：只显示当前选中的面板 */
+        #ds-local-panel:not(.ds-fw-panel) .ds-tab-pane { display: none !important; }
+        #ds-local-panel:not(.ds-fw-panel) .ds-tab-pane.active { display: flex !important; }
+        /* 侧栏模式紧凑化：缩小内边距与间距 */
+        #ds-local-panel:not(.ds-fw-panel) { padding: 10px; gap: 8px; }
+        #ds-local-panel:not(.ds-fw-panel) .ds-tab-pane { gap: 6px; }
+        #ds-local-panel:not(.ds-fw-panel) .ds-log-area { max-height: 130px; }
+        #ds-local-panel:not(.ds-fw-panel) #ds-setup-container { gap: 6px; }
         .ds-fw {
             position: fixed; z-index: 99998; display: flex; flex-direction: column;
             background: var(--dsw-alias-bg-layer-2, #2c2c2e);
@@ -385,6 +411,8 @@
         #ds-local-panel.ds-fw-panel #ds-plugin-menu-btn { flex-shrink: 0; }
         #ds-local-panel.ds-fw-panel .ds-tab-pane[data-pane="interject"],
         #ds-local-panel.ds-fw-panel .ds-tab-pane[data-pane="log"] { display: none !important; }
+        /* 悬浮模式：插话/日志已拆成独立窗口，标签栏无意义，隐藏 */
+        #ds-local-panel.ds-fw-panel #ds-tab-bar { display: none !important; }
         #ds-panel-head { user-select: none; }
         .ds-fw-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
         .ds-fw-min, #ds-min-btn { display: inline-flex; align-items: center; justify-content: center; height: 20px; width: 20px; padding: 0; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: transparent; color: #81858c; cursor: pointer; flex-shrink: 0; font-family: inherit; line-height: 0; }
@@ -2041,7 +2069,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         const source = String(call.source || call.path || ex.source || ex.path || '').trim();
         if (!name) throw new ToolError('参数校验', '缺少 plugin_name', '示例：<plugin_name>my_tool</plugin_name>');
         if (!source) throw new ToolError('参数校验', '缺少 source', '先用 writefile 把插件代码写到工作区，再用 <source>相对路径</source> 指向它');
-        // 挂载插件会把代码载入服务端进程执行：非完全权限模式必须确认
+        // 挂载插件会把�����码载入服务端进程执行：非完全权限模式必须确认
         if (!autoMode) {
             if (!await showConfirmDialog('挂载服务端插件', name, call.reason,
                 `<div style="font-size:12px;color:#ffb74d;">代码来源：${esc(source)}<br>插件将在本地服务进程内运行，拥有文件/系统/网络访问权限。</div>`))
@@ -2052,7 +2080,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         let data = {};
         try { data = await resp.json(); } catch (e) {}
         if (!resp.ok || data.error) {
-            throw new ToolError('挂载插件', data.error || `HTTP ${resp.status}`, '检查插件代码与 name 是否一致（name 需与文件名同形）');
+            throw new ToolError('挂���插件', data.error || `HTTP ${resp.status}`, '检查插件代码与 name 是否一致（name 需与文件名同形）');
         }
         if (data.plugins) W.serverPlugins = data.plugins;
         const act = data.action === 'updated' ? '已更新' : '已创建';
@@ -2451,6 +2479,96 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
     // 每 2 秒检查一次：有排队且 AI 空闲就发
     setInterval(() => { try { flushInterjectWhenIdle(); } catch (e) {} }, 2000);
 
+    // ===== 无尽探索：AI 回复完却没有调用任何工具时，自动催它继续自主推进 =====
+    let lastEndlessKey = '';    // 已催促过的消息 key，避免对同一条反复催
+    let endlessIdleCount = 0;   // 连续「无工具回复」次数，用于退避降频
+    let endlessNextAllowedAt = 0;
+
+    function resetEndlessIdle() {
+        endlessIdleCount = 0;
+        endlessNextAllowedAt = 0;
+    }
+
+    function buildEndlessPrompt() {
+        return '【无尽探索·系统提示】\n' +
+            '你刚才的回复没有调用任何工具。如果任务尚未完成，请立即继续：\n' +
+            '1. 先用工具观察现状（listdir / openfile / grep 等），不要凭记忆推测。\n' +
+            '2. 确定下一步最有价值的动作并直接执行，不要停下来征求用户意见。\n' +
+            '3. 持续推进，直到任务真正完成或遇到必须由用户决定的分歧。\n' +
+            '如果任务确实已经全部完成，请回复「任务已完成」并简要说明成果，之后不会再打扰你。';
+    }
+
+    async function maybeEndlessExplore() {
+        if (!endlessExplore || !isModeOn || isPaused) return;
+        if (isProcessing || isCoolingDown || isCooldown || isCompressing) return;
+        if (pendingResults) return;
+        if (Date.now() < endlessNextAllowedAt) return;
+
+        const item = getLatestAssistantItem();
+        if (!item) return;
+        const key = item.getAttribute('data-virtual-list-item-key');
+        if (!key || key === lastEndlessKey) return;
+
+        const st = msgStore.get(key);
+        if (!st || !st.done) return;                 // 还在生成，等写完再说
+        if (getContentLength(item) < 2) return;      // 空回复不催
+
+        // 含未执行的 toolcall：交给正常执行流程，不催
+        try {
+            const parsed = parseToolcalls(item);
+            if (parsed && parsed.calls && parsed.calls.length) {
+                const stillPending = parsed.calls.some(c => !st.sigs.has(toolcallSignature(c)));
+                if (stillPending) return;
+            }
+        } catch (e) {}
+
+        // 判断 AI 是否已声明任务完成
+        let text = '';
+        try {
+            const c = pick(SEL.assistantContent, item);
+            text = c ? (c.innerText || '') : '';
+        } catch (e) {}
+        if (/任务已完成|全部完成|已经完成所有|没有更多可以做的/.test(text)) {
+            lastEndlessKey = key;
+            log('无尽探索：AI 声明任务已完成，停止催促');
+            return;
+        }
+
+        // 退避：连续催促后逐步拉长间隔，上限 2 分钟
+        const gap = Math.min(endlessExploreGapMs * Math.pow(2, endlessIdleCount), 120000);
+
+        lastEndlessKey = key;
+        endlessIdleCount++;
+        endlessNextAllowedAt = Date.now() + gap;
+        isProcessing = true;
+        processingStart = Date.now();
+        try {
+            dsSetStatus('working', '无尽探索·催促继续');
+            log(`无尽探索：AI 未调用工具，${Math.round(gap / 1000)}s 后催促继续（第 ${endlessIdleCount} 次）`);
+            const r = await sendMessage(buildEndlessPrompt(), 8000);
+            if (!r.ok) {
+                log('无尽探索催促发送失败: ' + (r.reason || '未知'));
+                lastEndlessKey = '';           // 允许下次重试同一条
+                endlessIdleCount = Math.max(0, endlessIdleCount - 1);
+                endlessNextAllowedAt = Date.now() + endlessExploreGapMs;
+            } else {
+                showToast('info', '无尽探索：已催促 AI 继续自主推进', 2500);
+            }
+        } catch (e) {
+            log('无尽探索异常: ' + ((e && e.message) || e));
+            lastEndlessKey = '';
+        } finally {
+            isProcessing = false;
+            processingStart = 0;
+            isCooldown = true;
+            if (cooldownTimer) clearTimeout(cooldownTimer);
+            cooldownTimer = setTimeout(() => {
+                isCooldown = false;
+                if (isModeOn) checkAndProcess();
+            }, 1500);
+        }
+    }
+
     function pushInterject(msg) {
         const m = String(msg || '').trim();
         if (!m) return false;
@@ -2525,6 +2643,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         isProcessing = true;
         processingStart = Date.now();
         lastExecTime = Date.now();
+        resetEndlessIdle();   // 有工具在执行，说明 AI 仍在推进，重置无尽探索退避
         dsSetStatus('working', '执行中...');
 
         const results = [];
@@ -2660,7 +2779,7 @@ await sleep(300);
             }
             if (!sent) {
                 retryCount++;
-                log(`回传失败（${lastReason}），10 秒后自动重试（第 ${retryCount} 次）...`);
+                log(`回传失败（${lastReason}��，10 秒后自动重试（第 ${retryCount} 次）...`);
                 showToast('warning', `网络波动，回传失败。10 秒后自动重试...`, 3000);
                 dsSetStatus('working', '自动重试中');
                 await sleep(SEND_RETRY_MS);
@@ -2759,6 +2878,11 @@ await sleep(300);
 
         if (Date.now() - lastExecTime < 1000) return;
         await tryProcess();
+
+        // tryProcess 没有执行任何工具时，交给无尽探索判断是否需要催促
+        if (!isProcessing && !isCooldown) {
+            try { await maybeEndlessExplore(); } catch (e) { log('无尽探索检查异常: ' + ((e && e.message) || e)); }
+        }
     }
 
     function startObserver() {
@@ -3140,7 +3264,7 @@ await sleep(300);
                 <button id="ds-connect-btn" class="ds-btn ds-btn-primary">开启模式</button>
             </div>
             <div id="ds-main-container" style="display:none;flex-direction:column;gap:8px;">
-                <div id="ds-tab-bar" class="ds-panel-tabs" style="display:none;">
+                <div id="ds-tab-bar" class="ds-panel-tabs">
                     <button class="ds-tab-btn active" data-tab="interject">插话</button>
                     <button class="ds-tab-btn" data-tab="log">日志</button>
                     <button class="ds-tab-btn" data-tab="action">操作</button>
@@ -3173,6 +3297,9 @@ await sleep(300);
                     </label>
                     <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="checkbox" id="ds-throttle-toggle" checked> 开启防封控冷却
+                    </label>
+                    <label style="font-size:12px;color:var(--dsw-alias-label-tertiary,#81858c);display:flex;align-items:center;gap:6px;cursor:pointer;" title="AI 回复完却没调用工具时，自动催它继续自主推进，全程无需用户操作">
+                        <input type="checkbox" id="ds-endless-toggle"> 无尽探索（AI 不调工具时自动催它继续）
                     </label>
                     <div style="display:flex;flex-direction:column;gap:7px;padding:9px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:8px;">
                         <div style="font-size:11px;color:#81858c;">可调参数（改完即时生效，自动记住）</div>
@@ -3376,6 +3503,32 @@ await sleep(300);
         const throttleToggle = $('ds-throttle-toggle');
         const pauseBtn = $('ds-pause-btn');
         const pluginMenuBtn = $('ds-plugin-menu-btn');
+
+        // ===== 侧栏选项卡切换（悬浮模式已把插话/日志拆成独立窗口，不适用）=====
+        const TAB_KEY = 'ds_panel_tab';
+        function activateTab(name) {
+            const bar = $('ds-tab-bar');
+            if (!bar) return;
+            bar.querySelectorAll('.ds-tab-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.tab === name);
+            });
+            panel.querySelectorAll('.ds-tab-pane').forEach(p => {
+                p.classList.toggle('active', p.dataset.pane === name);
+            });
+            try { localStorage.setItem(TAB_KEY, name); } catch (e) {}
+        }
+        const tabBarEl = $('ds-tab-bar');
+        if (tabBarEl) {
+            tabBarEl.addEventListener('click', (e) => {
+                const b = e.target.closest('.ds-tab-btn');
+                if (!b || !b.dataset.tab) return;
+                activateTab(b.dataset.tab);
+            });
+            let initTab = 'interject';
+            try { initTab = localStorage.getItem(TAB_KEY) || 'interject'; } catch (e) {}
+            if (!['interject', 'log', 'action'].includes(initTab)) initTab = 'interject';
+            activateTab(initTab);
+        }
         if (pluginMenuBtn) pluginMenuBtn.addEventListener('click', () => {
             try { openPluginManager(); } catch (e) { showToast('error', '打开插件管理失败: ' + e.message, 3000); }
         });
@@ -3444,6 +3597,19 @@ await sleep(300);
         throttleToggle.addEventListener('change', () => { autoThrottle = throttleToggle.checked; saveState(); });
 
         // ===== 可调参数输入框：改完即时生效并持久化 =====
+        const endlessToggle = $('ds-endless-toggle');
+        if (endlessToggle) {
+            endlessToggle.checked = !!endlessExplore;
+            endlessToggle.addEventListener('change', () => {
+                endlessExplore = endlessToggle.checked;
+                resetEndlessIdle();
+                saveState();
+                log(endlessExplore ? '无尽探索已开启' : '无尽探索已关闭');
+                showToast(endlessExplore ? 'success' : 'info',
+                    endlessExplore ? '无尽探索已开启：AI 停手时会自动催它继续' : '无尽探索已关闭', 2500);
+                if (endlessExplore) checkAndProcess();
+            });
+        }
         const paramBatchLimitEl = $('ds-param-batch-limit');
         const paramCooldownEl = $('ds-param-cooldown');
         const paramPreWaitEl = $('ds-param-pre-wait');
@@ -3716,6 +3882,10 @@ await sleep(300);
             batchLimit = 25;
             batchCooldownMs = 20000;
             preReturnWaitMs = 3000;
+            endlessExplore = false;
+            resetEndlessIdle();
+            lastEndlessKey = '';
+            try { if (endlessToggle) endlessToggle.checked = false; } catch {}
             try { syncParamInputs(); } catch {}
             dsSetStatus('none', '已断开');
             setupContainer.style.display = 'flex';
@@ -3738,6 +3908,8 @@ await sleep(300);
                 autoMode = !!st.autoMode;
                 autoThrottle = st.autoThrottle !== false;
                 applyTunables(st);
+                try { if (endlessToggle) endlessToggle.checked = !!endlessExplore; } catch {}
+                resetEndlessIdle();
                 try { syncParamInputs(); } catch {}
                 log('已恢复上次的配置（工作区/目标/开关/可调参数），点击"开启模式"继续');
             }
