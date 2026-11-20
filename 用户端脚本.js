@@ -2592,7 +2592,7 @@ try { W.DS_UI_Slots.removeItem('plg_' + pluginName + '_tg'); } catch {}
         isProcessing = true;
         processingStart = Date.now();
         try {
-            dsSetStatus('working', '催促继续');
+            dsSetStatus('working', '无尽探索');
             log(`无尽探索：AI 未调用工具，${Math.round(gap / 1000)}s 后催促继续（第 ${endlessIdleCount} 次）`);
             const r = await sendMessage(buildEndlessPrompt(), 8000);
             if (!r.ok) {
